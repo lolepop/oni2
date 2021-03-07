@@ -17,7 +17,7 @@ jobs:
       with:
         node-version: 14.x
     
-    - run: npm install -g esy@latest windows-build-tools node-gyp
+    - run: npm install -g esy@latest windows-build-tools@4.0.0 node-gyp
     - run: node install-node-deps.js
     
     - run: esy '@release' run -f --checkhealth
