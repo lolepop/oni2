@@ -21,10 +21,15 @@ jobs:
     - run: npm install -g node-gyp && node-gyp install 12.17.0 && node-gyp list
     - run: node install-node-deps.js --prod
   
-    - run: esy '@release' install
-    - run: esy '@release' build
-    - run: esy '@release' create
-    - run: ./scripts/windows/publish.ps1
+    - run: esy install
+    - run: esy bootstrap
+    - run: esy build
+    
+    # lmao this is so shit
+#     - run: esy '@release' install
+#     - run: esy '@release' build
+#     - run: esy '@release' create
+#     - run: ./scripts/windows/publish.ps1
     
     - name: upload build
       uses: actions/upload-artifact@v2.2.2
