@@ -22,7 +22,7 @@ jobs:
     - run: node install-node-deps.js --prod
   
     - run: esy '@release' install
-    - run: esy '@release' run --help
+    - run: esy '@release' build
     - run: esy '@release' create
     - run: ./scripts/windows/publish.ps1
     
