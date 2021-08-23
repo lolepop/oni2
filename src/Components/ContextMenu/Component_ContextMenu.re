@@ -90,6 +90,9 @@ let map = (~f: item('a) => item('a), {items, openSubmenus}) => {
 module View = {
   // MENUITEM
 
+  // HACK: Set ref to control blocking of onMouseUp click events
+  let wasChildOnMouseDownPressed = ref(false);
+
   module MenuItem = {
     module Constants = {
       let fontSize = 12.;
@@ -107,13 +110,6 @@ module View = {
         alignItems(`Center),
         backgroundColor(bg(~isFocused).from(theme)),
       ];
-
-      // let icon = fgColor => [
-      //   fontFamily("seti.ttf"),
-      //   fontSize(Constants.fontSize),
-      //   marginRight(10),
-      //   color(fgColor),
-      // ];
 
       let label = (~theme, ~isFocused) => [
         textOverflow(`Ellipsis),
@@ -140,19 +136,6 @@ module View = {
             Hooks.state(false, hooks);
           let ((maybeBbox, setBbox), hooks) = Hooks.state(None, hooks);
 
-          // let iconView =
-          //   switch (item.icon) {
-          //   | Some(icon) =>
-          //     IconTheme.IconDefinition.(
-          //       <Text
-          //         style={Styles.icon(icon.fontColor)}
-          //         text={FontIcon.codeToIcon(icon.fontCharacter)}
-          //       />
-          //     )
-
-          //   | None => <Text style={Styles.icon(Colors.transparentWhite)} text="" />
-          //   };
-
           let labelView = {
             let style = Styles.label(~theme, ~isFocused);
             <Text
@@ -164,7 +147,11 @@ module View = {
           };
 
           (
-            <View onMouseUp={_ => {onClick()}}>
+            <View
+              onMouseUp={_ => {
+                wasChildOnMouseDownPressed := true;
+                onClick();
+              }}>
               <View
                 style={Styles.container(~theme, ~isFocused)}
                 onBoundingBoxChanged={(bbox: Math.BoundingBox2d.t) => {
@@ -228,6 +215,7 @@ module View = {
           ~spreadRadius=0.,
           ~color=Color.rgba(0., 0., 0., 0.2),
         ),
+        pointerEvents(`Allow),
       ];
     };
 
@@ -432,14 +420,38 @@ module View = {
         Hooks.state(IntMap.empty);
       internalSetMenus := setMenus;
 
-      let onOverlayClick = _ => {
-        IntMap.iter((_key, {onCancel, _}) => {onCancel()}, menus);
+      let onOverlayClick =
+          (
+            direction: [ | `Down | `Up],
+            evt: NodeEvents.mouseButtonEventParams,
+          ) => {
+        let isClickInsideContextMenus = wasChildOnMouseDownPressed^;
+        wasChildOnMouseDownPressed := false;
+
+        let shouldCancel =
+          !isClickInsideContextMenus
+          && {
+            switch (evt.button, direction) {
+            | (MouseButton.BUTTON_RIGHT, `Down)
+            | (MouseButton.BUTTON_LEFT, `Up) => true
+            | _ => false
+            };
+          };
+
+        if (shouldCancel) {
+          menus |> IntMap.iter((_key, {onCancel, _}) => onCancel());
+        } else {
+          ();
+        };
       };
 
       if (IntMap.is_empty(menus)) {
         React.empty;
       } else {
-        <View onMouseUp=onOverlayClick style=Styles.backdrop>
+        <View
+          onMouseUp={onOverlayClick(`Up)}
+          onMouseDown={onOverlayClick(`Down)}
+          style=Styles.backdrop>
           {IntMap.bindings(menus)
            |> List.map(snd)
            |> List.map(({menu, _}) => menu)
@@ -468,9 +480,7 @@ module View = {
           ~orientation=(`Bottom, `Left),
           ~offsetX=0,
           ~offsetY=0,
-          // ~onItemSelect,
           ~dispatch: msg('a) => unit,
-          // ~onCancel,
           ~theme,
           ~font,
           (),
@@ -513,6 +523,7 @@ module View = {
 
           let x = int_of_float(x) + offsetX;
           let y = int_of_float(y) + offsetY - Constants.overlayY;
+          ();
 
           Overlay.setMenu(
             id,

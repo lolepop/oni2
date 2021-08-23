@@ -56,6 +56,23 @@ let contains = (position: CharacterPosition.t, range) => {
   );
 };
 
+let containsRange = (~query, range) => {
+  let start = query.start;
+  let stop = query.stop;
+
+  contains(start, range) && contains(stop, range);
+};
+
+let intersects = (a, b) => {
+  // A intersects with b
+  contains(a.start, b)
+  || contains(a.stop, b)
+  // or, b totally contains a
+  // or, a totally contains b
+  || containsRange(~query=a, b)
+  || containsRange(~query=b, a);
+};
+
 let shiftLine = (~afterLine: LineNumber.t, ~delta, range) => {
   LineNumber.(
     {
@@ -117,6 +134,17 @@ let toHash = ranges => {
 
   hash;
 };
+
+let compare = (a, b) =>
+  if (a.start.line != b.start.line) {
+    LineNumber.compare(a.start.line, b.start.line);
+  } else if (a.start.character != b.stop.character) {
+    CharacterIndex.compare(a.start.character, b.start.character);
+  } else if (a.stop.line != b.stop.line) {
+    LineNumber.compare(a.stop.line, b.stop.line);
+  } else {
+    CharacterIndex.compare(a.stop.character, b.stop.character);
+  };
 
 let equals = (a, b) =>
   CharacterPosition.(a.start == b.start && a.stop == b.stop);

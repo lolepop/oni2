@@ -10,6 +10,8 @@ module Provider = {
   type action = Actions.t;
   type params = {
     filesExclude: list(string),
+    followSymlinks: bool,
+    useIgnoreFiles: bool,
     directory: string,
     ripgrep: Ripgrep.t, // TODO: Necessary dependency?
     onUpdate: list(string) => unit, // TODO: Should return action
@@ -23,6 +25,8 @@ module Provider = {
       (
         ~id,
         ~params as {
+          followSymlinks,
+          useIgnoreFiles,
           filesExclude,
           directory,
           ripgrep,
@@ -34,8 +38,10 @@ module Provider = {
       ) => {
     Log.debug("Starting: " ++ id);
 
-    let dispose =
+    let dispose: unit => unit =
       ripgrep.Ripgrep.search(
+        ~followSymlinks,
+        ~useIgnoreFiles,
         ~filesExclude,
         ~directory,
         ~onUpdate,
@@ -67,6 +73,8 @@ module Provider = {
 let create =
     (
       ~id,
+      ~followSymlinks,
+      ~useIgnoreFiles,
       ~filesExclude,
       ~directory,
       ~ripgrep,
@@ -77,5 +85,14 @@ let create =
   Subscription.create(
     id,
     (module Provider),
-    {filesExclude, directory, ripgrep, onUpdate, onComplete, onError},
+    {
+      followSymlinks,
+      useIgnoreFiles,
+      filesExclude,
+      directory,
+      ripgrep,
+      onUpdate,
+      onComplete,
+      onError,
+    },
   );

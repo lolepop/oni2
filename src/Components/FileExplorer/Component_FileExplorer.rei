@@ -5,10 +5,7 @@ open Oni_Core;
 [@deriving show]
 type msg;
 
-module Msg: {
-  let keyPressed: string => msg;
-  let activeFileChanged: option(FpExp.t(FpExp.absolute)) => msg;
-};
+module Msg: {let activeFileChanged: option(FpExp.t(FpExp.absolute)) => msg;};
 
 type model;
 
@@ -17,6 +14,8 @@ let setRoot: (~rootPath: FpExp.t(FpExp.absolute), model) => model;
 let root: model => FpExp.t(FpExp.absolute);
 
 let keyPress: (string, model) => model;
+
+let reload: model => model;
 
 let getFileIcon:
   (~languageInfo: Exthost.LanguageInfo.t, ~iconTheme: IconTheme.t, string) =>
@@ -29,27 +28,24 @@ type outmsg =
   | Effect(Isolinear.Effect.t(msg))
   | OpenFile(string)
   | PreviewFile(string)
-  | GrabFocus;
+  | GrabFocus
+  | WatchedPathChanged({
+      path: FpExp.t(FpExp.absolute),
+      stat: option(Luv.File.Stat.t),
+    });
 
-let update:
-  (
-    ~config: Config.resolver,
-    ~configuration: Feature_Configuration.model,
-    msg,
-    model
-  ) =>
-  (model, outmsg);
+let update: (~config: Config.resolver, msg, model) => (model, outmsg);
 
 // SUBSCRIPTION
 
-let sub:
-  (~configuration: Feature_Configuration.model, model) => Isolinear.Sub.t(msg);
+let sub: (~config: Config.resolver, model) => Isolinear.Sub.t(msg);
 
 // VIEW
 
 module View: {
   let make:
     (
+      ~config: Config.resolver,
       ~isFocused: bool,
       ~iconTheme: IconTheme.t,
       ~languageInfo: Exthost.LanguageInfo.t,
@@ -66,6 +62,7 @@ module View: {
 };
 
 module Contributions: {
+  let configuration: list(Config.Schema.spec);
   let commands: (~isFocused: bool) => list(Command.t(msg));
   let contextKeys: (~isFocused: bool, model) => WhenExpr.ContextKeys.t;
 };

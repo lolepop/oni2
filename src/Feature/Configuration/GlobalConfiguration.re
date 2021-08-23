@@ -46,6 +46,16 @@ module Decoders = {
            ),
       ),
     ]);
+
+  let titleBarStyle: decoder([ | `Native | `Custom]) =
+    string
+    |> map(String.lowercase_ascii)
+    |> map(
+         fun
+         | "native" => `Native
+         | "custom" => `Custom
+         | _ => `Custom,
+       );
 };
 
 module Encoders = {
@@ -57,6 +67,11 @@ module Encoders = {
       | `None => string("none")
       | `Inline => string("inline")
       };
+
+  let titleBarStyle: encoder([ | `Native | `Custom]) =
+    fun
+    | `Native => string("native")
+    | `Custom => string("custom");
 };
 
 module Codecs = {
@@ -206,6 +221,14 @@ module VimSettings = {
       |> VimSetting.decode_value_opt(bool)
       |> Option.value(~default=false)
     });
+
+  let lineSpace =
+    vim("linespace", lineSpaceSetting => {
+      lineSpaceSetting
+      |> VimSetting.decode_value_opt(int)
+      |> Option.map(LineHeight.padding)
+      |> Option.value(~default=LineHeight.default)
+    });
 };
 
 module Editor = {
@@ -215,6 +238,14 @@ module Editor = {
       "editor.codeLens",
       bool,
       ~default=true,
+    );
+
+  let lineHeight =
+    setting(
+      ~vim=VimSettings.lineSpace,
+      "editor.lineHeight",
+      custom(~decode=LineHeight.decode, ~encode=LineHeight.encode),
+      ~default=LineHeight.default,
     );
 
   let snippetSuggestions =
@@ -263,6 +294,39 @@ module Explorer = {
     );
 };
 
+module Files = {
+  let exclude =
+    setting(
+      "files.exclude",
+      list(string),
+      ~default=["_esy", ".git", "node_modules"],
+    );
+};
+
+module Search = {
+  let followSymlinks = setting("search.followSymlinks", bool, ~default=true);
+
+  let useIgnoreFiles = setting("search.useIgnoreFiles", bool, ~default=true);
+};
+
+module Window = {
+  // On Windows, default the titlebar style to native, due to various bugs around the custom-rendered window, like:
+  // #3730 - Keyboard shortcuts for window movement broken
+  // #3071 - Window has no shadow on Windows
+  // #3063 - Part of onivim fullscreen is visible on second monitor
+  let defaultTitleBarStyle =
+    switch (Revery.Environment.os) {
+    | Windows(_) => `Native
+    | _ => `Custom
+    };
+  let titleBarStyle =
+    setting(
+      "window.titleBarStyle",
+      custom(~decode=Decoders.titleBarStyle, ~encode=Encoders.titleBarStyle),
+      ~default=defaultTitleBarStyle,
+    );
+};
+
 module Workbench = {
   let activityBarVisible =
     setting("workbench.activityBar.visible", bool, ~default=true);
@@ -272,6 +336,11 @@ module Workbench = {
 
   let editorEnablePreview =
     setting("workbench.editor.enablePreview", bool, ~default=true);
+
+  let treeIndent = setting("workbench.tree.indent", int, ~default=5);
+
+  let treeRenderIndentGuides =
+    setting("workbench.tree.renderIndentGuides", bool, ~default=true);
 };
 
 let contributions = [
@@ -281,9 +350,16 @@ let contributions = [
   vsync.spec,
   Editor.codeLensEnabled.spec,
   Editor.largeFileOptimizations.spec,
+  Editor.lineHeight.spec,
   Editor.snippetSuggestions.spec,
+  Files.exclude.spec,
   Explorer.autoReveal.spec,
+  Search.followSymlinks.spec,
+  Search.useIgnoreFiles.spec,
+  Window.titleBarStyle.spec,
   Workbench.activityBarVisible.spec,
   Workbench.editorShowTabs.spec,
   Workbench.editorEnablePreview.spec,
+  Workbench.treeIndent.spec,
+  Workbench.treeRenderIndentGuides.spec,
 ];

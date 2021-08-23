@@ -1,7 +1,52 @@
 open EditorCoreTypes;
 open Oni_Core;
 open Oni_Core.Utility;
-module Log = (val Log.withNamespace("Service_Vim"));
+module Log = (val Log.withNamespace("Oni2.Service.Vim"));
+
+module EditConverter = {
+  open Oni_Core;
+
+  let textToArray = (~removeTrailingNewLine) =>
+    fun
+    | None => [|""|]
+    | Some(text) =>
+      text
+      |> Utility.StringEx.removeWindowsNewLines
+      |> (
+        text =>
+          removeTrailingNewLine
+            ? Utility.StringEx.removeTrailingNewLine(text) : text
+      )
+      |> Utility.StringEx.splitNewLines;
+
+  let extHostSingleEditToVimEdit =
+      (~buffer, edit: Exthost.Edit.SingleEditOperation.t) => {
+    let range = edit.range |> Exthost.OneBasedRange.toRange;
+
+    let bufferRange = Oni_Core.Buffer.characterRange(buffer);
+
+    // We need to remove the trailing new line in some specific circumstances:
+    // - The edit covers the entire buffer
+    // AND
+    // - The buffer has no trailing new line
+
+    // Some formatters, like prettier or the ocaml formatter, send a single,
+    // uber-edit - with all the formatted lines in a buffer. In addition,
+    // they _might_ add a trailing new line (and if we don't handle it -
+    // will hit bugs like #3320).
+
+    // Other formatters, like Python or clangd, send line-by-line formats -
+    // it's important to not ignore the trailing new-lines for line-by-line
+    // edits, because otherwise we'll hit bugs like #3288
+
+    let removeTrailingNewLine =
+      !Oni_Core.Buffer.hasTrailingNewLine(buffer)
+      && CharacterRange.containsRange(~query=bufferRange, range);
+    (
+      {range, text: textToArray(~removeTrailingNewLine, edit.text)}: Vim.Edit.t
+    );
+  };
+};
 
 let forceReload = () =>
   Isolinear.Effect.create(~name="vim.discardChanges", () =>
@@ -29,24 +74,37 @@ let quitAll = () =>
   );
 
 module Effects = {
-  let paste = (~toMsg, text) => {
+  let paste = (~context=?, ~toMsg, text) => {
     Isolinear.Effect.createWithDispatch(~name="vim.clipboardPaste", dispatch => {
-      let isCmdLineMode = Vim.Mode.isCommandLine(Vim.Mode.current());
-      let isInsertMode = Vim.Mode.isInsert(Vim.Mode.current());
+      let context =
+        switch (context) {
+        | None => Vim.Context.current()
+        | Some(ctx) => ctx
+        };
+      let mode = context.mode;
+      let isCmdLineMode = Vim.Mode.isCommandLine(mode);
+      let isInsertMode = Vim.Mode.isInsert(mode);
+      let isSelectMode = Vim.Mode.isSelect(mode);
+      let isNormalMode = Vim.Mode.isNormal(mode);
+      let isVisualMode = Vim.Mode.isVisual(mode);
 
-      if (isInsertMode || isCmdLineMode) {
+      if (isInsertMode || isCmdLineMode || isSelectMode) {
         if (!isCmdLineMode) {
           Vim.command("set paste") |> ignore;
         };
 
         Log.infof(m => m("Pasting: %s", text));
         let (latestContext: Vim.Context.t, _effects) =
-          Oni_Core.VimEx.inputString(text);
+          Vim.input(~context, text);
 
         if (!isCmdLineMode) {
           Vim.command("set nopaste") |> ignore;
           dispatch(toMsg(latestContext.mode));
         };
+      } else if (isVisualMode || isNormalMode) {
+        let (latestContext: Vim.Context.t, _effects) =
+          Vim.input(~context, "\"*p");
+        dispatch(toMsg(latestContext.mode));
       };
     });
   };
@@ -59,6 +117,7 @@ module Effects = {
 
   let applyEdits =
       (
+        ~shouldAdjustCursors,
         ~bufferId: int,
         ~version: int,
         ~edits: list(Vim.Edit.t),
@@ -82,7 +141,7 @@ module Effects = {
               ),
             );
           } else {
-            Vim.Buffer.applyEdits(~edits, buffer);
+            Vim.Buffer.applyEdits(~shouldAdjustCursors, ~edits, buffer);
           };
         };
 
@@ -92,6 +151,7 @@ module Effects = {
 
   let setLines =
       (
+        ~shouldAdjustCursors,
         ~bufferId: int,
         ~start=?,
         ~stop=?,
@@ -107,6 +167,7 @@ module Effects = {
           Error("No buffer found with id: " ++ string_of_int(bufferId))
         | Some(buffer) =>
           Vim.Buffer.setLines(
+            ~shouldAdjustCursors,
             ~undoable=true,
             ~start?,
             ~stop?,
@@ -172,21 +233,40 @@ module Effects = {
     List.fold_left(adjustModeForEdit, mode, edits);
   };
 
-  let applyCompletion = (~meetColumn, ~insertText, ~toMsg, ~additionalEdits) =>
+  let applyCompletion =
+      (
+        ~cursor: CharacterPosition.t,
+        ~replaceSpan: CharacterSpan.t,
+        ~insertText,
+        ~toMsg,
+        ~additionalEdits,
+      ) =>
     Isolinear.Effect.createWithDispatch(~name="applyCompletion", dispatch => {
-      let cursor = Vim.Cursor.get();
-      // TODO: Does this logic correctly handle unicode characters?
-      let delta =
-        ByteIndex.toInt(cursor.byte) - CharacterIndex.toInt(meetColumn);
+      let overwriteBefore =
+        CharacterIndex.toInt(cursor.character)
+        - CharacterIndex.toInt(replaceSpan.start);
 
-      let _: Vim.Context.t = VimEx.repeatKey(delta, "<BS>");
+      let overwriteAfter =
+        max(
+          0,
+          CharacterIndex.toInt(replaceSpan.stop)
+          - CharacterIndex.toInt(cursor.character),
+        );
+
+      let _: Vim.Context.t = VimEx.repeatKey(overwriteAfter, "<DEL>");
+      let _: Vim.Context.t = VimEx.repeatKey(overwriteBefore, "<BS>");
       let ({mode, _}: Vim.Context.t, _effects) =
         VimEx.inputString(insertText);
 
       let buffer = Vim.Buffer.getCurrent();
       let mode' =
         if (additionalEdits != []) {
-          Vim.Buffer.applyEdits(~edits=additionalEdits, buffer)
+          // We're manually adjusting the cursors here...
+          Vim.Buffer.applyEdits(
+            ~shouldAdjustCursors=false,
+            ~edits=additionalEdits,
+            buffer,
+          )
           |> Result.map(() => {adjustModeForEdits(mode, additionalEdits)})
           |> ResultEx.value(~default=mode);
         } else {
@@ -206,6 +286,23 @@ module Effects = {
       Vim.Buffer.setCurrent(currentBuffer);
 
       dispatch(toMsg(~bufferId=Vim.Buffer.getId(newBuffer)));
+    });
+  };
+
+  let saveAll = toMsg => {
+    Isolinear.Effect.createWithDispatch(~name="saveAll", dispatch => {
+      let (_: Vim.Context.t, _effects: list(Vim.Effect.t)) =
+        Vim.command("wa!");
+      dispatch(toMsg());
+    });
+  };
+
+  let save = (~bufferId, toMsg) => {
+    Isolinear.Effect.createWithDispatch(~name="saveBuffer", dispatch => {
+      let context = {...Vim.Context.current(), bufferId};
+      let (_: Vim.Context.t, _effects: list(Vim.Effect.t)) =
+        Vim.command(~context, "w!");
+      dispatch(toMsg());
     });
   };
 };

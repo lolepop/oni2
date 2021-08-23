@@ -12,6 +12,7 @@ type model = {
   theme: ColorTheme.t,
   tokenColors: Oni_Syntax.TokenTheme.t,
   selectedThemeId: option(string),
+  userCustomizations: ColorTheme.Colors.t,
 };
 
 let variant = ({theme, _}) => theme.variant;
@@ -24,10 +25,12 @@ let defaults =
     Colors.Dropdown.defaults,
     Colors.Editor.defaults,
     Colors.EditorError.defaults,
+    Colors.EditorUnnecessaryCode.defaults,
     Colors.EditorWarning.defaults,
     Colors.EditorInfo.defaults,
     Colors.EditorHint.defaults,
     Colors.EditorCursor.defaults,
+    Colors.EditorGroup.defaults,
     Colors.EditorGroupHeader.defaults,
     Colors.EditorGutter.defaults,
     Colors.EditorHoverWidget.defaults,
@@ -74,6 +77,8 @@ let initial = contributions => {
   theme: ColorTheme.{variant: Dark, colors: ColorTheme.Colors.empty},
   tokenColors: Oni_Syntax.TokenTheme.empty,
   selectedThemeId: None,
+
+  userCustomizations: ColorTheme.Colors.empty,
 };
 
 let tokenColors = ({tokenColors, _}) => tokenColors;
@@ -81,13 +86,12 @@ let tokenColors = ({tokenColors, _}) => tokenColors;
 let colors =
     (
       ~extensionDefaults as _=[], // TODO
-      ~customizations=ColorTheme.Colors.empty, // TODO
       model,
     ) => {
-  let {schema, theme, _} = model;
+  let {schema, theme, userCustomizations, _} = model;
 
   let rec resolve = key => {
-    switch (ColorTheme.Colors.get(key, customizations)) {
+    switch (ColorTheme.Colors.get(key, userCustomizations)) {
     | Some(color) => Some(color)
     | None =>
       switch (ColorTheme.Colors.get(key, theme.colors)) {
@@ -121,7 +125,7 @@ let colors =
        )
     |> ColorTheme.Colors.fromList;
 
-  ColorTheme.Colors.unionMany([defaults, theme.colors, customizations]);
+  ColorTheme.Colors.unionMany([defaults, theme.colors, userCustomizations]);
 };
 
 [@deriving show({with_path: false})]
@@ -131,6 +135,8 @@ type command =
 [@deriving show({with_path: false})]
 type msg =
   | Command(command)
+  | MenuPreviewTheme({themeId: string})
+  | MenuCommitTheme({themeId: string})
   | TextmateThemeLoaded({
       variant: ColorTheme.variant,
       colors: [@opaque] Textmate.ColorTheme.t,
@@ -140,16 +146,43 @@ type msg =
 
 module Msg = {
   let openThemePicker = Command(SelectTheme);
+
+  let vimColorSchemeSelected = (~themeId) =>
+    MenuPreviewTheme({themeId: themeId});
+
+  let menuPreviewTheme = (~themeId) => MenuPreviewTheme({themeId: themeId});
+
+  let menuCommitTheme = (~themeId) => MenuCommitTheme({themeId: themeId});
+};
+
+let setTheme = (~themeId, model) => {
+  ...model,
+  selectedThemeId: Some(themeId),
 };
 
 type outmsg =
   | Nothing
+  | ConfigurationTransform(ConfigurationTransformer.t)
   | OpenThemePicker(list(theme))
   | ThemeChanged(ColorTheme.Colors.t)
   | NotifyError(string);
 
 let update = (model, msg) => {
   switch (msg) {
+  | MenuCommitTheme({themeId}) =>
+    let themeTransformer = name =>
+      Oni_Core.ConfigurationTransformer.setField(
+        "workbench.colorTheme",
+        `String(name),
+      );
+
+    (
+      model |> setTheme(~themeId),
+      ConfigurationTransform(themeTransformer(themeId)),
+    );
+
+  | MenuPreviewTheme({themeId}) => (model |> setTheme(~themeId), Nothing)
+
   | TextmateThemeLoaded({variant, colors, tokenColors}) =>
     let colors =
       Textmate.ColorTheme.fold(
@@ -181,11 +214,6 @@ let update = (model, msg) => {
   };
 };
 
-let setTheme = (~themeId, model) => {
-  ...model,
-  selectedThemeId: Some(themeId),
-};
-
 // SUBSCRIPTION
 
 let sub = (~getThemeContribution, {selectedThemeId, _}) => {
@@ -210,10 +238,24 @@ module Configuration = {
 
   let colorTheme =
     setting("workbench.colorTheme", string, ~default=Constants.defaultTheme);
+
+  let userCustomizations =
+    setting(
+      "workbench.colorCustomizations",
+      custom(
+        ~decode=ColorTheme.Colors.decode,
+        ~encode=ColorTheme.Colors.encode,
+      ),
+      ~default=ColorTheme.Colors.empty,
+    );
 };
 
 let configurationChanged = (~resolver, model) => {
-  {...model, selectedThemeId: Some(Configuration.colorTheme.get(resolver))};
+  {
+    ...model,
+    userCustomizations: Configuration.userCustomizations.get(resolver),
+    selectedThemeId: Some(Configuration.colorTheme.get(resolver)),
+  };
 };
 
 module Commands = {
@@ -231,5 +273,6 @@ module Commands = {
 module Contributions = {
   let commands = [Commands.selectTheme];
 
-  let configuration = Configuration.[colorTheme.spec];
+  let configuration =
+    Configuration.[colorTheme.spec, userCustomizations.spec];
 };

@@ -3,19 +3,6 @@ open Exthost;
 
 type model;
 
-// DEPRECATED strategy for working with configuration
-module LegacyConfiguration = LegacyConfiguration;
-module LegacyConfigurationValues = LegacyConfigurationValues;
-module LegacyConfigurationParser = LegacyConfigurationParser;
-
-module Legacy: {
-  let configuration: model => LegacyConfiguration.t;
-  let getValue:
-    (~fileType: string=?, LegacyConfigurationValues.t => 'a, model) => 'a;
-
-  let set: (LegacyConfiguration.t, model) => model;
-};
-
 // LOADER
 
 module ConfigurationLoader: {
@@ -24,6 +11,8 @@ module ConfigurationLoader: {
   let none: t;
 
   let file: FpExp.t(FpExp.absolute) => t;
+
+  let loadImmediate: t => result(Config.Settings.t, string);
 };
 
 let initial:
@@ -74,6 +63,9 @@ module GlobalConfiguration = GlobalConfiguration;
 
 // CONTRIBUTIONS
 
-module Contributions: {let commands: list(Oni_Core.Command.t(msg));};
+module Contributions: {
+  let commands: list(Oni_Core.Command.t(msg));
+  let keybindings: list(Feature_Input.Schema.keybinding);
+};
 
 module Testing: {let transform: ConfigurationTransformer.t => msg;};

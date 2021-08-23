@@ -13,10 +13,9 @@ describe("FilterJob", ({describe, _}) => {
     Actions.{
       category: None,
       name,
-      command: () => Actions.Noop,
+      command: _ => Actions.Noop,
       icon: None,
       highlight: [],
-      handle: None,
     };
 
   let rec runToCompletion = job =>

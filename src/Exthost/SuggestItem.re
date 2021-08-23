@@ -94,7 +94,7 @@ type t = {
   filterText: option(string),
   insertText: option(string),
   insertTextRules: InsertTextRules.t,
-  suggestRange: option(SuggestRange.t),
+  suggestRange: SuggestRange.t,
   commitCharacters: list(string),
   additionalTextEdits: list(Edit.SingleEditOperation.t),
   command: option(ExtCommand.t),
@@ -128,13 +128,25 @@ let sortText = ({sortText, label, _}) => {
   };
 };
 
+module SuggestItemLabel = {
+  type t = string;
+
+  let decode =
+    Json.Decode.(
+      one_of([
+        ("string", string),
+        ("record", obj(({field, _}) => {field.required("label", string)})),
+      ])
+    );
+};
+
 module Dto = {
-  let decode = {
+  let decode = (~defaultRange) => {
     Json.Decode.(
       obj(({field, _}) => {
         // These fields come from the `ISuggestDataDtoField` definition:
         // https://github.com/onivim/vscode-exthost/blob/50bef147f7bbd250015361a4e3cad3305f65bc27/src/vs/workbench/api/common/extHost.protocol.ts#L1089
-        let label = field.required("a", string);
+        let label = field.required("a", SuggestItemLabel.decode);
 
         let kind =
           field.withDefault(
@@ -147,18 +159,21 @@ module Dto = {
                ),
           );
 
-        let detail = field.optional("c", string);
-        let documentation = field.optional("d", MarkdownString.decode);
-        let sortText = field.optional("e", string);
-        let filterText = field.optional("f", string);
-        let insertText = field.optional("h", string);
+        let detail = field.withDefault("c", None, nullable(string));
+        let documentation =
+          field.withDefault("d", None, nullable(MarkdownString.decode));
+        let sortText = field.withDefault("e", None, nullable(string));
+        let filterText = field.withDefault("f", None, nullable(string));
+        let insertText = field.withDefault("h", None, nullable(string));
         let insertTextRules =
           field.withDefault(
             "i",
             InsertTextRules.none,
             InsertTextRules.decode,
           );
-        let suggestRange = field.optional("j", SuggestRange.decode);
+        let suggestRange =
+          field.optional("j", SuggestRange.decode)
+          |> Option.value(~default=defaultRange);
         let commitCharacters = field.withDefault("k", [], list(string));
         let additionalTextEdits =
           field.withDefault("l", [], list(Edit.SingleEditOperation.decode));
@@ -187,13 +202,10 @@ module Dto = {
 let encode = suggestItem =>
   Json.Encode.(
     {
-      let suggestRange =
-        suggestItem.suggestRange
-        |> Option.value(~default=SuggestRange.Single(OneBasedRange.one));
       obj([
         ("label", string(suggestItem.label)),
         ("kind", suggestItem.kind |> CompletionKind.toInt |> int),
-        ("range", suggestRange |> SuggestRange.encode),
+        ("range", suggestItem.suggestRange |> SuggestRange.encode),
         ("insertText", suggestItem |> insertText |> string),
       ]);
     }

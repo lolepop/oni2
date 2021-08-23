@@ -31,13 +31,19 @@ cp _release/linux/bin/*.* _release/Onivim2.AppDir/usr/bin
 cp _release/linux/bin/Oni2 _release/Onivim2.AppDir/usr/bin/Oni2
 
 cp vendor/ripgrep-v0.10.0/linux/rg _release/Onivim2.AppDir/usr/bin/rg
-cp vendor/node-v12.17.0/linux-x64/node _release/Onivim2.AppDir/usr/bin/node
+cp vendor/node-v14.15.4/linux-x64/node _release/Onivim2.AppDir/usr/bin/node
 
 ls _release/Onivim2.AppDir/usr/share
 
 cp -r extensions/ _release/Onivim2.AppDir/usr/bin
 cp -r node/ _release/Onivim2.AppDir/usr/share
 # cp -r src/textmate_service/ _release/Onivim2.AppDir/usr/bin
+
+# Copy and compile GLib schemas for bundled version of GTK
+# Needed for #3706 - newer schemas may be incompatible with the GTK we bundle with Onivim
+mkdir -p _release/Onivim2.AppDir/usr/share/glib-2.0/schemas
+cp /usr/share/glib-2.0/schemas/*.gschema.xml _release/Onivim2.AppDir/usr/share/glib-2.0/schemas/
+glib-compile-schemas _release/Onivim2.AppDir/usr/share/glib-2.0/schemas
 
 rm -f _release/Onivim2.AppDir/usr/bin/setup.json
 

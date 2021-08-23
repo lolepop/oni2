@@ -13,14 +13,6 @@ module Internal = {
 
 open Internal;
 
-let copyFilePath =
-  register(
-    ~category="Editor",
-    ~title="Copy Active Filepath to Clipboard",
-    "copyFilePath",
-    CopyActiveFilepathToClipboard,
-  );
-
 let noop = register("noop", Noop);
 
 let command = cmd => CommandInvoked({command: cmd, arguments: `Null});
@@ -51,9 +43,34 @@ module List = {
   let focusDown = register("list.focusDown", ListFocusDown);
   let focusUp = register("list.focusUp", ListFocusUp);
 
-  let select = register("list.select", ListSelect);
+  let select =
+    register(
+      "list.select",
+      ListSelect({direction: Oni_Core.SplitDirection.Current}),
+    );
+
   let selectBackground =
     register("list.selectBackground", ListSelectBackground);
+
+  let selectHorizontal =
+    register(
+      "oni.list.selectHorizontal",
+      ListSelect({direction: Oni_Core.SplitDirection.Horizontal}),
+    );
+
+  let selectVertical =
+    register(
+      "oni.list.selectVertical",
+      ListSelect({
+        direction: Oni_Core.SplitDirection.Vertical({shouldReuse: false}),
+      }),
+    );
+
+  let selectNewTab =
+    register(
+      "oni.list.selectNewTab",
+      ListSelect({direction: Oni_Core.SplitDirection.NewTab}),
+    );
 };
 
 module Oni = {
@@ -119,6 +136,13 @@ module Workbench = {
         ~title="Go to File...",
         "workbench.action.quickOpen",
         QuickmenuShow(FilesPicker),
+      );
+
+    let quickOpenBuffer =
+      register(
+        ~title="Go to Buffer...",
+        "workbench.action.quickOpenBuffer",
+        QuickmenuShow(OpenBuffersPicker),
       );
 
     let quickOpenNavigateNextInEditorPicker =

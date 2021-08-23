@@ -16,18 +16,20 @@ type t =
   | Exthost(Feature_Exthost.msg)
   | Syntax(Feature_Syntax.msg)
   | Changelog(Feature_Changelog.msg)
+  | ClientServer(Feature_ClientServer.msg)
   | CommandInvoked({
       command: string,
       arguments: Yojson.Safe.t,
     })
   | Commands(Feature_Commands.msg(t))
   | Configuration(Feature_Configuration.msg)
+  | ContextMenu(Feature_ContextMenu.msg)
   | Decorations(Feature_Decorations.msg)
   | Diagnostics(Feature_Diagnostics.msg)
   | EditorFont(Service_Font.msg)
   | Help(Feature_Help.msg)
   | Input(Feature_Input.msg)
-  | TerminalFont(Service_Font.msg)
+  | Keyboard(Feature_Keyboard.msg)
   | Extensions(Feature_Extensions.msg)
   | ExtensionBufferUpdateQueued({triggerKey: option(string)})
   | FileChanged(Service_FileWatcher.event)
@@ -68,6 +70,7 @@ type t =
     })
   | Notification(Feature_Notification.msg)
   | Messages(Feature_Messages.msg)
+  | Output(Feature_Output.msg)
   | Editor({
       scope: EditorScope.t,
       msg: Feature_Editor.msg,
@@ -84,32 +87,21 @@ type t =
   | QuickmenuCommandlineUpdated(string, int)
   | QuickmenuUpdateRipgrepProgress(progress)
   | QuickmenuUpdateFilterProgress([@opaque] array(menuItem), progress)
-  | QuickmenuUpdateExtensionItems({
-      id: int,
-      items: list(Exthost.QuickOpen.Item.t),
-    })
   | QuickmenuSearch(string)
   | QuickmenuClose
+  | QuickOpen(Feature_QuickOpen.msg)
   | ListFocus(int)
   | ListFocusUp
   | ListFocusDown
-  | ListSelect
+  | ListSelect({direction: SplitDirection.t})
   | ListSelectBackground
-  | NewBuffer({direction: [ | `Current | `Horizontal | `Vertical | `NewTab]})
+  | NewBuffer({direction: SplitDirection.t})
   | OpenBufferById({
       bufferId: int,
-      direction: [ | `Current | `Horizontal | `Vertical | `NewTab],
+      direction: SplitDirection.t,
     })
-  | OpenFileByPath(
-      string,
-      option([ | `Current | `Horizontal | `Vertical | `NewTab]),
-      option(CharacterPosition.t),
-    )
-  | PreviewFileByPath(
-      string,
-      option([ | `Horizontal | `Vertical | `NewTab]),
-      option(CharacterPosition.t),
-    )
+  | OpenFileByPath(string, SplitDirection.t, option(CharacterPosition.t))
+  | PreviewFileByPath(string, SplitDirection.t, option(CharacterPosition.t))
   | Pasted({
       rawText: string,
       isMultiLine: bool,
@@ -124,12 +116,9 @@ type t =
   | ReallyQuitting
   | RegisterQuitCleanup(unit => unit)
   | SearchClearHighlights(int)
-  | SetLanguageInfo([@opaque] Exthost.LanguageInfo.t)
   | SetGrammarRepository([@opaque] Oni_Syntax.GrammarRepository.t)
-  | ThemeSelected(string)
   | SetIconTheme([@opaque] IconTheme.t)
   | StatusBar(Feature_StatusBar.msg)
-  | CopyActiveFilepathToClipboard
   | SCM(Feature_SCM.msg)
   | Search(Feature_Search.msg)
   | SideBar(Feature_SideBar.msg)
@@ -137,7 +126,7 @@ type t =
   | Snippets(Feature_Snippets.msg)
   | Terminal(Feature_Terminal.msg)
   | Theme(Feature_Theme.msg)
-  | Pane(Feature_Pane.msg)
+  | Pane(Feature_Pane.msg(t))
   | VimExecuteCommand({
       allowAnimation: bool,
       command: string,
@@ -183,10 +172,9 @@ and tick = {
 and menuItem = {
   category: option(string),
   name: string,
-  command: unit => t,
+  command: option(SplitDirection.t) => t,
   icon: [@opaque] option(IconTheme.IconDefinition.t),
   highlight: list((int, int)),
-  handle: option(int),
 }
 and quickmenuVariant =
   | CommandPalette
@@ -194,12 +182,6 @@ and quickmenuVariant =
   | FilesPicker
   | OpenBuffersPicker
   | Wildmenu([@opaque] Vim.Types.cmdlineType)
-  | ThemesPicker([@opaque] list(Feature_Theme.theme))
-  | Extension({
-      id: int,
-      hasItems: bool,
-      resolver: [@opaque] Lwt.u(int),
-    })
 and progress =
   | Loading
   | InProgress(float)

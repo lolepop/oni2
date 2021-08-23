@@ -7,7 +7,9 @@
 open Oni_Core;
 
 module Commands = GlobalCommands;
-let windowCommandCondition = "!insertMode || terminalFocus" |> WhenExpr.parse;
+let windowCommandCondition =
+  "!commandLineFocus && !insertMode && !inQuickOpen || terminalFocus"
+  |> WhenExpr.parse;
 
 let isMacCondition = "isMac" |> WhenExpr.parse;
 let defaultKeyBindings =
@@ -28,7 +30,11 @@ let defaultKeyBindings =
       ~condition="quickmenuCursorEnd" |> WhenExpr.parse,
     ),
   ]
+  @ Feature_Search.Contributions.keybindings
   @ Feature_SideBar.Contributions.keybindings
+  @ Feature_Keyboard.Contributions.keybindings
+  @ Feature_Clipboard.Contributions.keybindings
+  @ Feature_Configuration.Contributions.keybindings
   @ Feature_Input.Schema.[
       bind(
         ~key="<C-TAB>",
@@ -55,29 +61,6 @@ let defaultKeyBindings =
         ~key="<D-S-P>",
         ~command=Commands.Workbench.Action.showCommands.id,
         ~condition="isMac" |> WhenExpr.parse,
-      ),
-      bind(
-        ~key="<C-V>",
-        ~command=Feature_Clipboard.Commands.paste.id,
-        // The WhenExpr parser doesn't support precedence, so we manually construct it here...
-        // It'd be nice to bring back explicit precedence via '(' and ')'
-        // Alternatively, a manual construction could be done with separate bindings for !isMac OR each condition
-        ~condition=
-          WhenExpr.(
-            And([
-              Not(Defined("isMac")),
-              Or([
-                And([Defined("editorTextFocus"), Defined("insertMode")]),
-                Defined("textInputFocus"),
-                Defined("commandLineFocus"),
-              ]),
-            ])
-          ),
-      ),
-      bind(
-        ~key="<D-V>",
-        ~command=Feature_Clipboard.Commands.paste.id,
-        ~condition=isMacCondition,
       ),
       bind(
         ~key="<ESC>",
@@ -141,6 +124,21 @@ let defaultKeyBindings =
       bind(
         ~key="<CR>",
         ~command=Commands.List.select.id,
+        ~condition="listFocus" |> WhenExpr.parse,
+      ),
+      bind(
+        ~key="<S-CR>",
+        ~command=Commands.List.selectVertical.id,
+        ~condition="listFocus" |> WhenExpr.parse,
+      ),
+      bind(
+        ~key="<C-x>",
+        ~command=Commands.List.selectHorizontal.id,
+        ~condition="listFocus" |> WhenExpr.parse,
+      ),
+      bind(
+        ~key="<C-t>",
+        ~command=Commands.List.selectNewTab.id,
         ~condition="listFocus" |> WhenExpr.parse,
       ),
       bind(
@@ -262,6 +260,41 @@ let defaultKeyBindings =
         ~condition=windowCommandCondition,
       ),
       bind(
+        ~key="<C-W>T",
+        ~command=Feature_Layout.Commands.moveTopLeft.id,
+        ~condition=windowCommandCondition,
+      ),
+      bind(
+        ~key="<C-W><C-T>",
+        ~command=Feature_Layout.Commands.moveTopLeft.id,
+        ~condition=windowCommandCondition,
+      ),
+      bind(
+        ~key="<C-W>B",
+        ~command=Feature_Layout.Commands.moveBottomRight.id,
+        ~condition=windowCommandCondition,
+      ),
+      bind(
+        ~key="<C-W><C-B>",
+        ~command=Feature_Layout.Commands.moveBottomRight.id,
+        ~condition=windowCommandCondition,
+      ),
+      bind(
+        ~key="<C-W>W",
+        ~command=Feature_Layout.Commands.cycleForward.id,
+        ~condition=windowCommandCondition,
+      ),
+      bind(
+        ~key="<C-W><C-W>",
+        ~command=Feature_Layout.Commands.cycleForward.id,
+        ~condition=windowCommandCondition,
+      ),
+      bind(
+        ~key="<C-W><S-W>",
+        ~command=Feature_Layout.Commands.cycleBackward.id,
+        ~condition=windowCommandCondition,
+      ),
+      bind(
         ~key="<C-W><C-S>",
         ~command=Feature_Layout.Commands.splitHorizontal.id,
         ~condition=windowCommandCondition,
@@ -371,12 +404,33 @@ let defaultKeyBindings =
         ~command=Feature_Layout.Commands.toggleMaximize.id,
         ~condition=windowCommandCondition,
       ),
+      bind(
+        ~key="<C-W><C-Q>",
+        ~command=Feature_Layout.Commands.closeActiveSplit.id,
+        ~condition=windowCommandCondition,
+      ),
+      bind(
+        ~key="<C-W>q",
+        ~command=Feature_Layout.Commands.closeActiveSplit.id,
+        ~condition=windowCommandCondition,
+      ),
+      bind(
+        ~key="<C-W>c",
+        ~command=Feature_Layout.Commands.closeActiveSplitUnlessLast.id,
+        ~condition=windowCommandCondition,
+      ),
+      bind(
+        ~key="<C-W><C-c>",
+        ~command=Feature_Layout.Commands.closeActiveSplitUnlessLast.id,
+        ~condition=windowCommandCondition,
+      ),
     ]
   @ Component_VimWindows.Contributions.keybindings
   @ Component_VimList.Contributions.keybindings
   @ Component_VimTree.Contributions.keybindings
   @ Feature_Snippets.Contributions.keybindings
-  @ Feature_Vim.Contributions.keybindings;
+  @ Feature_Vim.Contributions.keybindings
+  @ Feature_Diagnostics.Contributions.keybindings;
 
 type windowDisplayMode =
   | Minimized
@@ -389,6 +443,7 @@ type t = {
   bufferRenderers: BufferRenderers.t,
   changelog: Feature_Changelog.model,
   cli: Oni_CLI.t,
+  clientServer: Feature_ClientServer.model,
   clipboard: Feature_Clipboard.model,
   colorTheme: Feature_Theme.model,
   commands: Feature_Commands.model(Actions.t),
@@ -399,22 +454,24 @@ type t = {
   fileSystem: Feature_FileSystem.model,
   help: Feature_Help.model,
   input: Feature_Input.model,
+  keyboard: Feature_Keyboard.model,
   logging: Feature_Logging.model,
   messages: Feature_Messages.model,
-  terminalFont: Service_Font.font,
+  output: Feature_Output.model,
   uiFont: UiFont.t,
   quickmenu: option(Quickmenu.t),
+  quickOpen: Feature_QuickOpen.model,
   sideBar: Feature_SideBar.model,
   extensions: Feature_Extensions.model,
   exthost: Feature_Exthost.model,
   iconTheme: IconTheme.t,
   isQuitting: bool,
   languageSupport: Feature_LanguageSupport.model,
-  languageInfo: Exthost.LanguageInfo.t,
   grammarRepository: Oni_Syntax.GrammarRepository.t,
   lifecycle: Lifecycle.t,
   menuBar: Feature_MenuBar.model,
   notifications: Feature_Notification.model,
+  proxy: Feature_Proxy.model,
   registers: Feature_Registers.model,
   scm: Feature_SCM.model,
   sneak: Feature_Sneak.model,
@@ -429,17 +486,19 @@ type t = {
   workspace: Feature_Workspace.model,
   zen: Feature_Zen.model,
   // State of the bottom pane
-  pane: Feature_Pane.model,
+  pane: Feature_Pane.model(t, Actions.t),
   newQuickmenu: Feature_Quickmenu.model(Actions.t),
   searchPane: Feature_Search.model,
   focus: Focus.stack,
   modal: option(Feature_Modals.model),
   snippets: Feature_Snippets.model,
   textContentProviders: list((int, string)),
+  titleBar: Feature_TitleBar.model,
   vim: Feature_Vim.model,
   zoom: Feature_Zoom.model,
   autoUpdate: Feature_AutoUpdate.model,
   registration: Feature_Registration.model,
+  contextMenu: Feature_ContextMenu.model,
 };
 
 let initial =
@@ -458,11 +517,13 @@ let initial =
       ~titlebarHeight,
       ~getZoom,
       ~setZoom,
+      ~useNativeTitleBar,
     ) => {
   let config =
     Feature_Configuration.initial(
       ~loader=configurationLoader,
       [
+        Component_FileExplorer.Contributions.configuration,
         Feature_AutoUpdate.Contributions.configuration,
         Feature_Buffers.Contributions.configuration,
         Feature_Editor.Contributions.configuration,
@@ -501,6 +562,7 @@ let initial =
     bufferRenderers: initialBufferRenderers,
     changelog: Feature_Changelog.initial,
     cli,
+    clientServer: Feature_ClientServer.create(),
     clipboard: Feature_Clipboard.initial,
     colorTheme:
       Feature_Theme.initial([
@@ -514,9 +576,9 @@ let initial =
     diagnostics: Feature_Diagnostics.initial,
     input:
       Feature_Input.initial(~loader=keybindingsLoader, defaultKeyBindings),
+    keyboard: Feature_Keyboard.initial,
     quickmenu: None,
     editorFont: defaultEditorFont,
-    terminalFont: defaultEditorFont,
     extensions:
       Feature_Extensions.initial(
         ~globalPersistence=extensionGlobalPersistence,
@@ -534,15 +596,17 @@ let initial =
     help: Feature_Help.initial,
     iconTheme: IconTheme.create(),
     isQuitting: false,
-    languageInfo: Exthost.LanguageInfo.initial,
     menuBar:
       Feature_MenuBar.initial(
         ~menus=[],
         ~groups=
           [Feature_Workspace.Contributions.menuGroup]
+          @ Feature_LanguageSupport.Contributions.menuGroups
           @ Feature_SideBar.Contributions.menuGroups
-          @ Feature_Help.Contributions.menuGroups,
+          @ Feature_Help.Contributions.menuGroups
+          @ Feature_Keyboard.Contributions.menuGroups,
       ),
+    output: Feature_Output.initial,
     grammarRepository: Oni_Syntax.GrammarRepository.empty,
     notifications: Feature_Notification.initial,
     registers: Feature_Registers.initial,
@@ -562,17 +626,56 @@ let initial =
     fileExplorer: Feature_Explorer.initial(~rootPath=maybeWorkspace),
     zen:
       Feature_Zen.initial(~isSingleFile=List.length(cli.filesToOpen) == 1),
-    pane: Feature_Pane.initial,
+    pane:
+      Feature_Pane.initial(
+        [
+          Feature_Diagnostics.Contributions.pane
+          |> Feature_Pane.Schema.map(
+               ~msg=msg => Actions.Diagnostics(msg),
+               ~model=state => state.diagnostics,
+             ),
+          Feature_Notification.Contributions.pane
+          |> Feature_Pane.Schema.map(
+               ~msg=msg => Actions.Notification(msg),
+               ~model=state => state.notifications,
+             ),
+        ]
+        @ (
+          Feature_LanguageSupport.Contributions.panes
+          |> List.map(
+               Feature_Pane.Schema.map(
+                 ~msg=msg => Actions.LanguageSupport(msg),
+                 ~model=state => state.languageSupport,
+               ),
+             )
+        )
+        @ [
+          Feature_Output.Contributions.pane
+          |> Feature_Pane.Schema.map(
+               ~msg=msg => Actions.Output(msg),
+               ~model=state => state.output,
+             ),
+          Feature_Terminal.Contributions.pane
+          |> Feature_Pane.Schema.map(
+               ~msg=msg => Actions.Terminal(msg),
+               ~model=state => state.terminals,
+             ),
+        ],
+      ),
+    proxy: Feature_Proxy.default,
     newQuickmenu: Feature_Quickmenu.initial,
     searchPane: Feature_Search.initial,
     focus: Focus.initial,
     modal: None,
+    quickOpen: Feature_QuickOpen.initial,
     snippets: Feature_Snippets.initial,
     terminals: Feature_Terminal.initial,
+    titleBar: Feature_TitleBar.initial(~useNativeTitleBar),
     textContentProviders: [],
     vim: Feature_Vim.initial,
     zoom: Feature_Zoom.initial(~getZoom, ~setZoom),
     autoUpdate: Feature_AutoUpdate.initial,
     registration: Feature_Registration.initial(licenseKeyPersistence),
+    contextMenu: Feature_ContextMenu.initial,
   };
 };

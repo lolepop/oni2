@@ -6,19 +6,29 @@ sidebar_label: Building from Source
 
 # Building the Editor
 
+Oni2 can be built from source using the following setup and steps!
+
+This takes around 30-40 mins on an "average" machine, as we need to setup a brand new
+set of tooling for both OCaml and Skia, which are both fairly large. Repeat builds
+should take only a few seconds, as build artifacts are cached by `esy`.
+
 ## Prerequisites
+
+When performing a non-Docker based install, you'll need the following dependencies on
+all platforms. There are additional platform specific dependencies linked below.
 
 - Install [Git](https://git-scm.com/)
 - Install [Node](https://nodejs.org/en)
-- Install [Esy](https://esy.sh) (__0.6.2__ or above is required, but the latest version is recommened: `npm install -g esy@latest`)
+- Install [Esy](https://esy.sh) (__0.6.10__ or above is required, but the latest version is recommended: `npm install -g esy@latest`)
 > __NOTE:__ **Linux-only**: if you need to install using `sudo npm install -g esy@latest` then your NPM installation **might be broken** follow [the instruction here to fix it](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally) this is related to this issue [esy/esy#1099.](https://github.com/esy/esy/issues/1099)
 
+- Check the Revery dependencies for your platform: https://github.com/revery-ui/revery/wiki/Building-&-Installing.
 - __Windows-only__: Run `npm install -g windows-build-tools` (this installs some build tools that aren't included by default on Windows)
 - Install any other system packages required by Oni2 dependencies, as outlined below.
 
 ## Dependencies
 
-All platforms require `git`, `node` and `esy`, and the ones outlined in the `revery` docs:
+All platforms require `git`, `node` and `esy`, and anything outlined in the `revery` docs:
 https://github.com/revery-ui/revery/wiki/Building-&-Installing.
 
 ### Windows
@@ -37,8 +47,57 @@ Some Linux distributions may need other packages:
  - Fedora/CentOS : `libXt-devel`, `libSM-devel`, `libICE-devel`, `libacl-devel` and `ncurses-devel ` for `libvim`
  - Xorg related libraries: `libglu1-mesa-dev`, `libxxf86vm-dev` and `libxkbfile-dev`.
 
+## Docker build (Linux)
 
-## Build and Run
+The docker build path is the most contained path, and as such may be the easiest way on
+some Linux distributions. We include a Dockerfile in `scripts/docker/centos` that we use
+for all our CI builds, so it should be up-to-date! This will produce an AppImage and
+`tar.gz` both suitable for Linux. Containers are not provided for other distributions
+(we only need this one), but should serve as a good base if specific changes are needed.
+
+The steps to use it are as follows:
+
+```sh
+# Clone the Oni2 repo
+git clone https://github.com/onivim/oni2
+cd oni2
+
+# Use our included script to setup a docker container
+docker build --network=host -t centos scripts/docker/centos
+
+# Now use that container to actually build an Oni2 AppImage.
+# Bind the Oni2 folder to the volume so that it can access the source.
+# We also bind ~/.esy such that the build steps are cached locally.
+# This means subsequent builds are fast.
+# You can clean that folder out to save space at the cost of build time for future
+# builds.
+docker container run --rm \
+    --name centos \
+    --network=host \
+    --volume `pwd`:/oni2 \
+    --volume ~/.esy:/esy/store \
+    --cap-add SYS_ADMIN \
+    --device /dev/fuse \
+    --security-opt apparmor:unconfined \
+    centos \
+    /bin/bash -c 'cd oni2 && ./scripts/docker-build.sh'
+
+# Wait 30-40 minutes on an average machine...
+# This takes up to about an hour on CI though, so may be worth
+# leaving for a bit!
+# During the initial esy steps, there isn't much output, so you
+# may end up waiting on `info fetching: done`. It will eventually
+# finish the initial install and move on to building, which has output.
+
+# Done!
+# This should drop an AppImage binary off in _release in the Oni2
+# folder.
+
+# You can run a health check if you would like...
+_release/Onivim2.AppDir/usr/bin/Oni2 -f --no-log-colors --checkhealth
+```
+
+## Build and Run from Source
 
 ### Clone repository
 
@@ -51,6 +110,7 @@ cd oni2
 
 ```sh
 npm install -g node-gyp
+node-gyp install 14.15.4
 node install-node-deps.js
 ```
 
@@ -114,7 +174,9 @@ We use auto formatting tool, you might want to run it before you commit changes
 
 - `esy format`
 
-## Release 
+## Release
+
+> __NOTE:__ On macOS, checkhealth may report that a library is not loaded (e.g. Sparkle). This is normal. To check that libraries are loaded in a generated release build, see the section on macOS below.
 
 To create a release build, run:
 
@@ -125,7 +187,7 @@ To create a release build, run:
 
 This will create a `_esy/release` folder at the root with the application bundle inside that folder there will be folders for built binaries, in `_esy/release/install/bin` the `Oni2` binary resides along `Oni2_editor`.
 
-Mind that these are actually symbolic links to `oni2/_esy/release/store/b/oni2-<hashvalue>/install/default/bin/Oni2`, the same is true for the `Oni2_editor` binary.
+With the exception of macOS, these are actually symbolic links to `oni2/_esy/release/store/b/oni2-<hashvalue>/install/default/bin/Oni2`, the same is true for the `Oni2_editor` binary. On macOS, the symlinks are replaced with the actual binaries.
 
 ### Windows
 
@@ -133,16 +195,22 @@ To create an installation package for Windows, run the following PowerShell scri
 
 - `./scripts/windows/publish.ps1`
 
-### OSX
+### macOS
 
-Once you have a release build created, you can install Oni2 in your `Applications` folder.
+When building a release on newer versions of macOS, checkhealth will report that some libraries are not loaded. This is because the libraries are not accessible until the app is fully built and can be ignored.
+
+To check that the libraries are in fact included in a generated release build, you can run the following command from the `oni2` directory:
+
+- `./_release/Onivim2.app/Contents/MacOS/Oni2 -f --checkhealth`
+
+You can also install Oni2 in your `Applications` folder.
 
 Run the following from the `oni2` directory:
 
 - `cp -R _release/Onivim2.app /Applications`
 
-If you want to open the editor from terminal with an `oni2` command, you can add Oni2 to the system PATH using a command
-item within the app:
+If you want to open the editor from the terminal with an `oni2` command, you can add Oni2 to the system PATH using a command
+from within the app:
 
 - Open Oni2 from launchpad
 - Open command palette with `Cmd + Shift + P`
@@ -171,8 +239,9 @@ If there's a problem in-between Oni2 and the extension, it can be helpful to bui
 
 #### Building
 
-- Navigate to your home directory (ie, `cd ~` on Linux / OSX, or `cd /` on Windows)
+- Navigate to your home directory (ie, `cd ~` on Linux / macOS, or `cd /` on Windows)
 - `git clone https://github.com/onivim/vscode-exthost`
+- `cd vscode-exthost`
 - `yarn install`
 - `yarn compile`
 

@@ -53,6 +53,7 @@ type msg =
   | ItemDisposed(string)
   | DiagnosticsClicked
   | FileTypeClicked
+  | IndentationClicked
   | ContextMenu(Component_ContextMenu.msg(contextMenuMsg))
   | NotificationCountClicked
   | NotificationsCountRightClicked
@@ -70,6 +71,7 @@ type outmsg =
   | ToggleProblems
   | ToggleNotifications
   | ShowFileTypePicker
+  | ShowIndentationPicker
   | Effect(Isolinear.Effect.t(msg));
 
 let notificationContextMenu =
@@ -142,6 +144,8 @@ let update = (~client, model, msg) => {
     |> Option.value(~default=(model, Nothing))
 
   | FileTypeClicked => (model, ShowFileTypePicker)
+
+  | IndentationClicked => (model, ShowIndentationPicker)
 
   | NotificationCountClicked => (model, ToggleNotifications)
 
@@ -277,8 +281,7 @@ let notificationCount =
       ~dispatch,
       (),
     ) => {
-  let text =
-    Feature_Notification.all(notifications) |> List.length |> string_of_int;
+  let text = Feature_Notification.count(notifications) |> string_of_int;
 
   let onClick = () => dispatch(NotificationCountClicked);
   let onRightClick = () => dispatch(NotificationsCountRightClicked);
@@ -479,7 +482,12 @@ module View = {
     let indentation = () => {
       let text = indentationSettings |> indentationToString;
 
-      <textItem font theme text />;
+      <textItem
+        font
+        theme
+        text
+        onClick={() => dispatch(IndentationClicked)}
+      />;
     };
 
     let fileType = () => {

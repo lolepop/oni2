@@ -1,6 +1,21 @@
 open Oni_Core;
 open Utility;
 
+module Icon = {
+  type t =
+    | Seti(IconTheme.IconDefinition.t)
+    | Codicon({
+        fontSize: option(float),
+        color: option(ColorTheme.Schema.definition),
+        icon: int,
+      });
+
+  let seti = iconDefinition => Seti(iconDefinition);
+
+  let codicon = (~fontSize=?, ~color=?, icon) =>
+    Codicon({fontSize, color, icon});
+};
+
 module Renderer = {
   open Revery;
   open Revery.UI;
@@ -40,6 +55,14 @@ module Renderer = {
         textWrap(TextWrapping.NoWrap),
         marginRight(10),
       ];
+
+    let codiconStyle =
+      Style.[
+        marginRight(10),
+        flexDirection(`Row),
+        justifyContent(`Center),
+        alignItems(`Center),
+      ];
   };
 
   let common: t(_) =
@@ -72,7 +95,7 @@ module Renderer = {
     let icon = iconSelector(item);
     let iconView =
       switch (icon) {
-      | Some(icon) =>
+      | Some(Icon.Seti(icon)) =>
         Oni_Core.IconTheme.IconDefinition.(
           <Text
             style={Styles.icon(icon.fontColor)}
@@ -81,6 +104,16 @@ module Renderer = {
             text={Oni_Components.FontIcon.codeToIcon(icon.fontCharacter)}
           />
         )
+      | Some(Icon.Codicon({fontSize, color, icon})) =>
+        let fontSize = fontSize |> Option.value(~default=font.size);
+        let colorSchema: Oni_Core.ColorTheme.Schema.definition =
+          color |> Option.value(~default=Feature_Theme.Colors.Menu.foreground);
+
+        let color = colorSchema.from(theme);
+
+        <Revery.UI.View style=Styles.codiconStyle>
+          <Codicon icon fontSize color />
+        </Revery.UI.View>;
       | None =>
         <Text style={Styles.icon(Revery.Colors.transparentWhite)} text="" />
       };
@@ -90,8 +123,9 @@ module Renderer = {
 };
 
 type internal('item, 'outmsg) = {
+  focusFirstItemByDefault: bool,
   onItemFocused: option('item => 'outmsg),
-  onItemSelected: option('item => 'outmsg),
+  onAccepted: option((~text: string, ~item: option('item)) => 'outmsg),
   onCancelled: option(unit => 'outmsg),
   placeholderText: string,
   itemRenderer: Renderer.t('item),
@@ -104,8 +138,9 @@ type menu('outmsg) =
 
 let menu:
   (
+    ~focusFirstItemByDefault: bool=?,
     ~onItemFocused: 'item => 'outmsg=?,
-    ~onItemSelected: 'item => 'outmsg=?,
+    ~onAccepted: (~text: string, ~item: option('item)) => 'outmsg=?,
     ~onCancelled: unit => 'outmsg=?,
     ~placeholderText: string=?,
     ~itemRenderer: Renderer.t('item)=?,
@@ -114,8 +149,9 @@ let menu:
   ) =>
   menu('outmsg) =
   (
+    ~focusFirstItemByDefault=true,
     ~onItemFocused=?,
-    ~onItemSelected=?,
+    ~onAccepted=?,
     ~onCancelled=?,
     ~placeholderText="type to search...",
     ~itemRenderer=Renderer.default,
@@ -123,8 +159,9 @@ let menu:
     initialItems,
   ) => {
     Menu({
+      focusFirstItemByDefault,
       onItemFocused,
-      onItemSelected,
+      onAccepted,
       onCancelled,
       placeholderText,
       itemRenderer,
@@ -141,11 +178,14 @@ let mapFunction: ('a => 'b, 'item => 'a, 'item) => 'b =
 let map: ('a => 'b, menu('a)) => menu('b) =
   (f, model) => {
     switch (model) {
-    | Menu({onItemFocused, onItemSelected, onCancelled, _} as orig) =>
+    | Menu({onItemFocused, onAccepted, onCancelled, _} as orig) =>
       Menu({
         ...orig,
         onItemFocused: onItemFocused |> Option.map(mapFunction(f)),
-        onItemSelected: onItemSelected |> Option.map(mapFunction(f)),
+        onAccepted: {
+          onAccepted
+          |> Option.map((orig, ~text, ~item) => {f(orig(~text, ~item))});
+        },
         onCancelled: onCancelled |> Option.map(mapFunction(f)),
       })
     };
@@ -170,14 +210,24 @@ module Instance = {
           shouldLower ? String.lowercase_ascii(str) : str;
         };
         let queryStr = Component_InputText.value(text);
+        let shouldLower = queryStr == String.lowercase_ascii(queryStr);
         let query = Zed_utf8.explode(queryStr);
         let filteredItems =
-          allItems
-          |> List.filter(item =>
-               Filter.fuzzyMatches(query, schema.toString(item))
-             )
-          |> Filter.rank(queryStr, format)
-          |> Array.of_list;
+          if (StringEx.isEmpty(queryStr)) {
+            // If there is no query, preserve original item order
+            allItems
+            |> List.mapi((idx, item) =>
+                 Filter.{item, highlight: [], score: (-1.0) *. float(idx)}
+               )
+            |> Array.of_list;
+          } else {
+            allItems
+            |> List.filter(item =>
+                 Filter.fuzzyMatches(query, format(item, ~shouldLower))
+               )
+            |> Filter.rank(queryStr, format)
+            |> Array.of_list;
+          };
 
         Instance({...orig, filteredItems});
       };
@@ -269,13 +319,31 @@ module Instance = {
 
   let select: t('a) => option('a) =
     fun
+    | Instance({schema, filteredItems, focused, text, _}) => {
+        let len = Array.length(filteredItems);
+        let item =
+          focused
+          |> OptionEx.flatMap(focusedIndex =>
+               if (focusedIndex >= 0 && focusedIndex < len) {
+                 Some(filteredItems[focusedIndex].item);
+               } else {
+                 None;
+               }
+             );
+
+        let text = Component_InputText.value(text);
+        schema.onAccepted |> Option.map(f => f(~text, ~item));
+      };
+
+  let focusMsg: t('a) => option('a) =
+    fun
     | Instance({schema, filteredItems, focused, _}) => {
         let len = Array.length(filteredItems);
         focused
         |> OptionEx.flatMap(focusedIndex =>
              if (focusedIndex >= 0 && focusedIndex < len) {
                let item = filteredItems[focusedIndex];
-               schema.onItemSelected |> Option.map(f => f(item.item));
+               schema.onItemFocused |> Option.map(f => f(item.item));
              } else {
                None;
              }
@@ -292,17 +360,22 @@ module Instance = {
 };
 
 let instantiate: menu('outmsg) => Instance.t('outmsg) =
-  fun
-  | Menu(internal) =>
-    Instance.Instance({
-      schema: internal,
-      text:
-        Component_InputText.empty
-        |> Component_InputText.setPlaceholder(
-             ~placeholder=internal.placeholderText,
-           ),
-      allItems: internal.items,
-      filteredItems: [||],
-      focused: None,
-    })
-    |> Instance.updateFilteredItems;
+  menu =>
+    switch (menu) {
+    | Menu(internal) =>
+      let canFocusDefault =
+        internal.focusFirstItemByDefault && internal.items != [];
+      let focused = canFocusDefault ? Some(0) : None;
+      Instance.Instance({
+        schema: internal,
+        text:
+          Component_InputText.empty
+          |> Component_InputText.setPlaceholder(
+               ~placeholder=internal.placeholderText,
+             ),
+        allItems: internal.items,
+        filteredItems: [||],
+        focused,
+      })
+      |> Instance.updateFilteredItems;
+    };

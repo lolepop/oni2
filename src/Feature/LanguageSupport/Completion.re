@@ -18,7 +18,10 @@ type providerMsg =
 [@deriving show]
 type msg =
   | Command(command)
-  | Provider(providerMsg);
+  | Provider(providerMsg)
+  | CompletionItemClicked(CompletionItem.t)
+  | CompletionClickedOutside
+  | CompletionItemMouseEntered({index: int});
 
 type exthostMsg;
 
@@ -49,13 +52,13 @@ module Session = {
         meet: CompletionMeet.t,
         cursor: CharacterPosition.t,
         currentItems: list(CompletionItem.t),
-        filteredItems: [@opaque] list(Filter.result(CompletionItem.t)),
+        filteredItems: [@opaque] list(CompletionItem.t),
       })
     | Completed({
         providerModel: [@opaque] 'model,
         meet: CompletionMeet.t,
         allItems: list(CompletionItem.t),
-        filteredItems: [@opaque] list(Filter.result(CompletionItem.t)),
+        filteredItems: [@opaque] list(CompletionItem.t),
       })
     | Failure(string)
     | Accepted({meet: CompletionMeet.t});
@@ -109,40 +112,20 @@ module Session = {
     | Session(session) => Session({...session, state: NotStarted});
 
   let filter:
-    (~query: string, list(CompletionItem.t)) =>
-    list(Filter.result(CompletionItem.t)) =
+    (~query: string, list(CompletionItem.t)) => list(CompletionItem.t) =
     (~query, items) => {
-      let toString = (item: CompletionItem.t, ~shouldLower) =>
-        shouldLower ? String.lowercase_ascii(item.label) : item.label;
-
-      let explodedQuery = Zed_utf8.explode(query);
-
-      let items' =
-        items
-        |> List.filter((item: CompletionItem.t) =>
-             if (String.length(item.filterText) < String.length(query)) {
-               false;
-             } else {
-               Filter.fuzzyMatches(explodedQuery, item.filterText);
-             }
-           )
-        |> Filter.rank(query, toString);
-
-      // Tag as fuzzy matched
-      if (explodedQuery != []) {
-        items'
-        |> List.map((filterItem: Filter.result(CompletionItem.t)) =>
-             {
-               ...filterItem,
-               item: {
-                 ...filterItem.item,
-                 isFuzzyMatching: true,
-               },
-             }
-           );
-      } else {
-        items';
-      };
+      let explodedQuery = Zed_utf8.explode(query |> String.lowercase_ascii);
+      items
+      |> List.filter((item: CompletionItem.t) =>
+           if (String.length(item.filterText) < String.length(query)) {
+             false;
+           } else {
+             Filter.fuzzyMatches(
+               explodedQuery,
+               item.filterText |> String.lowercase_ascii,
+             );
+           }
+         );
     };
 
   let filteredItems =
@@ -153,12 +136,12 @@ module Session = {
         | Accepted(_) => StringMap.empty
         | Pending(_) => StringMap.empty
         | Failure(_) => StringMap.empty
-        | Partial({filteredItems, meet, _})
-        | Completed({filteredItems, meet, _}) =>
+        | Partial({filteredItems, _})
+        | Completed({filteredItems, _}) =>
           filteredItems
           |> List.fold_left(
-               (acc, item: Filter.result(CompletionItem.t)) => {
-                 StringMap.add(item.item.label, (meet.location, item), acc)
+               (acc, item: CompletionItem.t) => {
+                 StringMap.add(item.label, item, acc)
                },
                StringMap.empty,
              )
@@ -176,11 +159,7 @@ module Session = {
                  (~providerModel, ~meet: CompletionMeet.t, ~cursor) => {
                // TODO: What to do with the error `_outmsg` case?
                let (providerModel', _outmsg) =
-                 ProviderImpl.update(
-                   ~isFuzzyMatching=meet.base != "",
-                   internalMsg,
-                   providerModel,
-                 );
+                 ProviderImpl.update(internalMsg, providerModel);
                let (completionState, items) =
                  ProviderImpl.items(providerModel');
                switch (completionState, items) {
@@ -190,7 +169,7 @@ module Session = {
                    meet,
                    cursor,
                    currentItems: items,
-                   filteredItems: filter(~query=meet.base, items),
+                   filteredItems: items,
                    providerModel: providerModel',
                  })
                | (Complete, items) =>
@@ -300,11 +279,7 @@ module Session = {
                    ...prev,
                    meet: newMeet,
                    cursor: position,
-                   filteredItems:
-                     filter(
-                       ~query=CompletionMeet.(newMeet.base),
-                       currentItems,
-                     ),
+                   filteredItems: currentItems,
                  })
                | Completed({allItems, meet, _} as prev)
                    when CompletionMeet.matches(meet, newMeet) =>
@@ -351,7 +326,7 @@ module Session = {
                ~base=meet.base,
                ~trigger,
                ~buffer,
-               ~location=meet.location,
+               ~location=meet.insertLocation,
              )
              |> Option.map(model => (meet, model))
            })
@@ -459,6 +434,10 @@ module Selection = {
       };
     };
 
+  let focus = (~index, ~count, _selection) => {
+    Some(index) |> ensureValidFocus(~count);
+  };
+
   let focusPrevious = (~count, selection) => {
     IndexEx.prevRollOverOpt(~last=count - 1, selection);
   };
@@ -470,18 +449,24 @@ module Selection = {
 
 type model = {
   providers: list(Session.t),
-  allItems: array((CharacterPosition.t, Filter.result(CompletionItem.t))),
+  allItems: array(CompletionItem.t),
   selection: Selection.t,
   isInsertMode: bool,
   isSnippetMode: bool,
   acceptOnEnter: bool,
+  acceptOnTab: bool,
+  itemsToShow: int,
   snippetSortOrder: [ | `Bottom | `Hidden | `Inline | `Top],
+  isShadowEnabled: bool,
+  isAnimationEnabled: bool,
 };
 
 let initial = {
   isInsertMode: false,
   isSnippetMode: false,
   acceptOnEnter: false,
+  acceptOnTab: true,
+  itemsToShow: Constants.defaultSuggestItemsToShow,
   providers: [
     Session.create(
       ~triggerCharacters=[],
@@ -505,20 +490,37 @@ let initial = {
   allItems: [||],
   selection: Selection.initial,
   snippetSortOrder: `Inline,
+  isAnimationEnabled: true,
+  isShadowEnabled: true,
 };
 
 let configurationChanged = (~config, model) => {
   {
     ...model,
     acceptOnEnter: CompletionConfig.acceptSuggestionOnEnter.get(config),
+    acceptOnTab: CompletionConfig.acceptSuggestionOnTab.get(config),
+    itemsToShow: CompletionConfig.itemsToShow.get(config),
     snippetSortOrder: CompletionConfig.snippetSuggestions.get(config),
+    isAnimationEnabled:
+      Feature_Configuration.GlobalConfiguration.animation.get(config),
+    isShadowEnabled:
+      Feature_Configuration.GlobalConfiguration.shadows.get(config),
   };
 };
 
 let providerCount = ({providers, _}) => List.length(providers) - 1;
 let availableCompletionCount = ({allItems, _}) => Array.length(allItems);
 
-let recomputeAllItems = (~snippetSortOrder, providers: list(Session.t)) => {
+let recomputeAllItems =
+    (
+      ~maybeBuffer,
+      ~cursor: CharacterPosition.t,
+      ~snippetSortOrder,
+      providers: list(Session.t),
+    ) => {
+  let maybeLine =
+    maybeBuffer |> OptionEx.flatMap(Buffer.rawLine(cursor.line));
+
   providers
   |> List.fold_left(
        (acc, session) => {
@@ -528,16 +530,8 @@ let recomputeAllItems = (~snippetSortOrder, providers: list(Session.t)) => {
          StringMap.merge(
            (
              _key,
-             maybeA:
-               option(
-                 (CharacterPosition.t, Filter.result(CompletionItem.t)),
-               ),
-             maybeB:
-               option(
-                 list(
-                   (CharacterPosition.t, Filter.result(CompletionItem.t)),
-                 ),
-               ),
+             maybeA: option(CompletionItem.t),
+             maybeB: option(list(CompletionItem.t)),
            ) =>
              switch (maybeA, maybeB) {
              | (None, None) => None
@@ -558,15 +552,20 @@ let recomputeAllItems = (~snippetSortOrder, providers: list(Session.t)) => {
        | [item] => [item]
        // If multiple - remove keywords
        | items =>
-         items
-         |> List.filter(item =>
-              !(Filter.(snd(item).item) |> CompletionItem.isKeyword)
-            )
+         items |> List.filter(item => !(item |> CompletionItem.isKeyword))
        }
      })
   |> StringMap.bindings
   |> List.concat_map(snd)
-  |> List.fast_sort(((_loc, a), (_loc, b)) =>
+  |> List.map((item: CompletionItem.t) => {
+       maybeLine
+       |> Option.map(line => {
+            let score = CompletionItemScorer.score(line, item, cursor);
+            {...item, score};
+          })
+       |> Option.value(~default=item)
+     })
+  |> List.fast_sort((a, b) =>
        CompletionItemSorter.compare(~snippetSortOrder, a, b)
      )
   |> Array.of_list;
@@ -592,21 +591,25 @@ let isActive = (model: model) => {
   |> Array.length > 0;
 };
 
+let start = model => {
+  ...model,
+  providers: model.providers |> List.map(Session.start),
+  allItems: [||],
+  selection: None,
+};
+
+let stop = model => {
+  ...model,
+  providers: model.providers |> List.map(Session.stop),
+  allItems: [||],
+  selection: None,
+};
+
 let reset = model =>
   if (model.isInsertMode && !model.isSnippetMode) {
-    {
-      ...model,
-      providers: model.providers |> List.map(Session.start),
-      allItems: [||],
-      selection: None,
-    };
+    start(model);
   } else {
-    {
-      ...model,
-      providers: model.providers |> List.map(Session.stop),
-      allItems: [||],
-      selection: None,
-    };
+    stop(model);
   };
 
 let startInsertMode = model => {
@@ -677,9 +680,14 @@ let unregister = (~handle, model) => {
     ),
 };
 
-let updateSessions = (providers, model) => {
+let updateSessions = (~buffer, ~activeCursor, providers, model) => {
   let allItems =
-    recomputeAllItems(~snippetSortOrder=model.snippetSortOrder, providers);
+    recomputeAllItems(
+      ~cursor=activeCursor,
+      ~maybeBuffer=Some(buffer),
+      ~snippetSortOrder=model.snippetSortOrder,
+      providers,
+    );
   let selection =
     Selection.ensureValidFocus(
       ~count=Array.length(allItems),
@@ -704,7 +712,7 @@ let cursorMoved =
          Session.refine(~languageConfiguration, ~buffer, ~position=current),
        );
 
-  model |> updateSessions(providers');
+  model |> updateSessions(~activeCursor=current, ~buffer, providers');
 };
 
 let invokeCompletion =
@@ -730,7 +738,7 @@ let invokeCompletion =
          ),
        );
 
-  model |> updateSessions(providers');
+  model |> updateSessions(~activeCursor, ~buffer, providers');
 };
 
 let refine = (~languageConfiguration, ~buffer, ~activeCursor, model) => {
@@ -744,7 +752,7 @@ let refine = (~languageConfiguration, ~buffer, ~activeCursor, model) => {
          ),
        );
 
-  model |> updateSessions(providers');
+  model |> updateSessions(~activeCursor, ~buffer, providers');
 };
 
 let bufferUpdated =
@@ -790,52 +798,7 @@ let bufferUpdated =
 let selected = model => {
   switch (model.selection) {
   | None => None
-  | Some(focusedIndex) =>
-    let (_: CharacterPosition.t, result: Filter.result(CompletionItem.t)) = model.
-                                                                    allItems[focusedIndex];
-    Some(result.item);
-  };
-};
-
-let tryToMaintainSelected = (~previousIndex, ~previousLabel, model) => {
-  let len = Array.length(model.allItems);
-  let idxToReplace = min(Array.length(model.allItems) - 1, previousIndex);
-
-  let getItemAtIndex = idx => {
-    let (_position, filterResult: Filter.result(CompletionItem.t)) = model.
-                                                                    allItems[idx];
-    filterResult.item;
-  };
-
-  // Sanity check - make sure there is a valid position.
-  // Completions list might be empty...
-  if (idxToReplace >= len || len == 0) {
-    model;
-  } else if
-    // Nothing to do - still in a good spot!
-    (getItemAtIndex(idxToReplace).label == previousLabel) {
-    model;
-  } else {
-    let idx = ref(-1);
-    let foundCurrent = ref(None);
-    while (idx^ < len - 1 && foundCurrent^ == None) {
-      incr(idx);
-      if (getItemAtIndex(idx^).label == previousLabel) {
-        foundCurrent := Some(idx^);
-      };
-    };
-
-    switch (foundCurrent^) {
-    | Some(idx) when idx == idxToReplace => model
-    | Some(idx) =>
-      // Swap idx and idx to replace, to maintain selected
-      let a = model.allItems[idxToReplace];
-      let b = model.allItems[idx];
-      model.allItems[idx] = a;
-      model.allItems[idxToReplace] = b;
-      model;
-    | None => model
-    };
+  | Some(focusedIndex) => Some(model.allItems[focusedIndex])
   };
 };
 
@@ -874,6 +837,56 @@ let update =
        })
     |> Option.value(~default)
 
+  | CompletionItemClicked(completionItem) =>
+    let allItems = allItems(model);
+
+    if (allItems == [||]) {
+      default;
+    } else {
+      let replaceSpan =
+        CompletionItem.replaceSpan(~activeCursor, completionItem);
+
+      let effect =
+        Exthost.SuggestItem.InsertTextRules.(
+          matches(~rule=InsertAsSnippet, completionItem.insertTextRules)
+        )
+          ? Outmsg.InsertSnippet({
+              replaceSpan,
+              snippet: completionItem.insertText,
+              additionalEdits: completionItem.additionalTextEdits,
+            })
+          : Outmsg.ApplyCompletion({
+              replaceSpan,
+              insertText: completionItem.insertText,
+              additionalEdits: completionItem.additionalTextEdits,
+            });
+
+      (
+        {
+          ...model,
+          providers:
+            List.map(
+              provider => {
+                provider
+                |> Session.complete(completionItem.additionalTextEdits)
+              },
+              model.providers,
+            ),
+          allItems: [||],
+          selection: None,
+        },
+        effect,
+      );
+    };
+
+  | CompletionClickedOutside =>
+    let allItems = allItems(model);
+    if (allItems == [||]) {
+      (model, Nothing);
+    } else {
+      (stop(model), Nothing);
+    };
+
   | Command(AcceptSelected) =>
     let allItems = allItems(model);
 
@@ -883,37 +896,23 @@ let update =
       switch (model.selection) {
       | None => default
       | Some(focusedIndex) =>
-        let (
-          location: CharacterPosition.t,
-          result: Filter.result(CompletionItem.t),
-        ) = allItems[focusedIndex];
+        let result = allItems[focusedIndex];
 
-        let meetColumn =
-          Exthost.SuggestItem.(
-            switch (result.item.suggestRange) {
-            | Some(SuggestRange.Single({startColumn, _})) =>
-              startColumn - 1 |> CharacterIndex.ofInt
-            | Some(SuggestRange.Combo({insert, _})) =>
-              Exthost.OneBasedRange.(
-                insert.startColumn - 1 |> CharacterIndex.ofInt
-              )
-            | None => location.character
-            }
-          );
+        let replaceSpan = CompletionItem.replaceSpan(~activeCursor, result);
 
         let effect =
           Exthost.SuggestItem.InsertTextRules.(
-            matches(~rule=InsertAsSnippet, result.item.insertTextRules)
+            matches(~rule=InsertAsSnippet, result.insertTextRules)
           )
             ? Outmsg.InsertSnippet({
-                meetColumn,
-                snippet: result.item.insertText,
-                additionalEdits: result.item.additionalTextEdits,
+                replaceSpan,
+                snippet: result.insertText,
+                additionalEdits: result.additionalTextEdits,
               })
             : Outmsg.ApplyCompletion({
-                meetColumn,
-                insertText: result.item.insertText,
-                additionalEdits: result.item.additionalTextEdits,
+                replaceSpan,
+                insertText: result.insertText,
+                additionalEdits: result.additionalTextEdits,
               });
 
         (
@@ -922,8 +921,7 @@ let update =
             providers:
               List.map(
                 provider => {
-                  provider
-                  |> Session.complete(result.item.additionalTextEdits)
+                  provider |> Session.complete(result.additionalTextEdits)
                 },
                 model.providers,
               ),
@@ -942,6 +940,13 @@ let update =
       Nothing,
     );
 
+  | CompletionItemMouseEntered({index}) =>
+    let count = Array.length(model.allItems);
+    (
+      {...model, selection: Selection.focus(~index, ~count, model.selection)},
+      Nothing,
+    );
+
   | Command(SelectPrevious) =>
     let count = Array.length(model.allItems);
     (
@@ -950,19 +955,15 @@ let update =
     );
 
   | Provider(msg) =>
-    // Before updating any items, check to see if there is already
-    // a selected item. We don't want to surprise the user
-    // and change the selected underneath them when populating!
-    let maybeCurrentSelection =
-      switch (model.selection) {
-      | None => None
-      | Some(idx) => selected(model) |> Option.map(item => (idx, item))
-      };
-
     let providers =
       model.providers |> List.map(provider => Session.update(msg, provider));
     let allItems =
-      recomputeAllItems(~snippetSortOrder=model.snippetSortOrder, providers);
+      recomputeAllItems(
+        ~cursor=activeCursor,
+        ~maybeBuffer,
+        ~snippetSortOrder=model.snippetSortOrder,
+        providers,
+      );
     let selection =
       Selection.ensureValidFocus(
         ~count=Array.length(allItems),
@@ -972,19 +973,8 @@ let update =
 
     let model' = {...model, providers, allItems, selection};
 
-    let model'' =
-      switch (maybeCurrentSelection) {
-      | Some((previousIndex, previousItem)) =>
-        model'
-        |> tryToMaintainSelected(
-             ~previousIndex,
-             ~previousLabel=previousItem.label,
-           )
-      | None => model'
-      };
-
     // If the current selection is different than the one we had before...
-    (model'', Nothing);
+    (model', Nothing);
   };
 };
 
@@ -1028,6 +1018,9 @@ module ContextKeys = {
 
   let acceptSuggestionOnEnter =
     bool("acceptSuggestionOnEnter", model => model.acceptOnEnter);
+
+  let acceptSuggestionOnTab =
+    bool("acceptSuggestionOnTab", model => model.acceptOnTab);
 };
 
 // KEYBINDINGS
@@ -1039,6 +1032,10 @@ module KeyBindings = {
     "editorTextFocus && suggestWidgetVisible" |> WhenExpr.parse;
   let acceptOnEnter =
     "acceptSuggestionOnEnter && suggestWidgetVisible && editorTextFocus"
+    |> WhenExpr.parse;
+
+  let acceptOnTab =
+    "acceptSuggestionOnTab && suggestWidgetVisible && editorTextFocus"
     |> WhenExpr.parse;
 
   let triggerSuggestCondition =
@@ -1101,7 +1098,7 @@ module KeyBindings = {
     bind(
       ~key="<TAB>",
       ~command=Commands.acceptSelected.id,
-      ~condition=suggestWidgetVisible,
+      ~condition=acceptOnTab,
     );
 
   let acceptSuggestionShiftTab =
@@ -1127,6 +1124,8 @@ module Contributions = {
       quickSuggestions.spec,
       wordBasedSuggestions.spec,
       acceptSuggestionOnEnter.spec,
+      acceptSuggestionOnTab.spec,
+      itemsToShow.spec,
       snippetSuggestions.spec,
     ];
 
@@ -1139,7 +1138,11 @@ module Contributions = {
     ];
 
   let contextKeys =
-    ContextKeys.[acceptSuggestionOnEnter, suggestWidgetVisible];
+    ContextKeys.[
+      acceptSuggestionOnTab,
+      acceptSuggestionOnEnter,
+      suggestWidgetVisible,
+    ];
 
   let keybindings =
     KeyBindings.[
@@ -1168,8 +1171,6 @@ module View = {
   module Constants = {
     let maxCompletionWidth = 225;
     let maxDetailWidth = 225;
-    let itemHeight = 22;
-    let maxHeight = itemHeight * 5;
     let opacity = 1.0;
     let padding = 8;
   };
@@ -1253,43 +1254,62 @@ module View = {
   module Styles = {
     open Style;
 
-    let outerPosition = (~x, ~y) => [
+    let outerPosition = (~x, ~y, ~fontSize, ~width, ~height) => [
       position(`Absolute),
-      top(y - 4),
-      left(x + 4),
+      top(y),
+      left(x - int_of_float(fontSize +. 0.5) - 8),
+      pointerEvents(`Allow),
+      Style.width(width),
+      Style.height(height + 2) // Add 2 to account for border!
     ];
 
-    let innerPosition = (~height, ~width, ~lineHeight, ~colors: Colors.t) => [
+    let innerPosition = (~height, ~width, ~colors: Colors.t) => [
       position(`Absolute),
-      top(int_of_float(lineHeight +. 0.5)),
+      top(0),
       left(0),
       Style.width(width),
-      Style.height(height),
+      Style.height(height + 2), // Add 2 to account for border!
       border(~color=colors.suggestWidgetBorder, ~width=1),
       backgroundColor(colors.suggestWidgetBackground),
+      opacity(Constants.opacity),
     ];
 
-    let item = (~isFocused, ~colors: Colors.t) => [
+    let item = (~rowHeight, ~isFocused, ~colors: Colors.t) => [
       isFocused
         ? backgroundColor(colors.suggestWidgetSelectedBackground)
         : backgroundColor(colors.suggestWidgetBackground),
       flexDirection(`Row),
+      height(rowHeight),
+      justifyContent(`Center),
+      cursor(Revery.MouseCursors.pointer),
     ];
 
-    let icon = (~color) => [
+    let icon = (~size, ~color) => [
       flexDirection(`Row),
       justifyContent(`Center),
       alignItems(`Center),
       flexGrow(0),
+      flexShrink(0),
       backgroundColor(color),
-      width(25),
-      padding(4),
+      width(size),
+      height(size),
     ];
 
-    let label = [flexGrow(1), margin(4)];
+    let label = [
+      flexGrow(1),
+      flexShrink(1),
+      marginTop(2),
+      marginHorizontal(4),
+    ];
+
+    let detail = [
+      flexGrow(2),
+      flexShrink(2),
+      marginTop(2),
+      marginHorizontal(4),
+    ];
 
     let text = (~highlighted=false, ~colors: Colors.t, ()) => [
-      textOverflow(`Ellipsis),
       textWrap(Revery.TextWrapping.NoWrap),
       color(
         highlighted ? colors.normalModeBackground : colors.editorForeground,
@@ -1298,31 +1318,34 @@ module View = {
 
     let highlightedText = (~colors) => text(~highlighted=true, ~colors, ());
 
-    let detail = (~width, ~lineHeight, ~colors: Colors.t) => [
+    let documentation = (~width, ~lineHeight, ~colors: Colors.t) => [
       position(`Absolute),
       left(width),
       top(int_of_float(lineHeight +. 0.5)),
       Style.width(Constants.maxDetailWidth),
-      flexDirection(`Column),
-      alignItems(`FlexStart),
-      justifyContent(`Center),
       border(~color=colors.suggestWidgetBorder, ~width=1),
       backgroundColor(colors.suggestWidgetBackground),
     ];
 
     let detailText = (~tokenTheme: TokenTheme.t) => [
       textOverflow(`Ellipsis),
+      textWrap(Revery.TextWrapping.NoWrap),
       color(tokenTheme.commentColor),
-      margin(3),
     ];
   };
 
   let itemView =
       (
         ~isFocused,
+        ~onClick,
+        ~onMouseEnter,
         ~text,
         ~kind,
         ~highlight,
+        ~detail: option(string),
+        ~tokenTheme,
+        ~rowHeight,
+        ~width,
         ~theme: Oni_Core.ColorTheme.Colors.t,
         ~colors: Colors.t,
         ~editorFont: Service_Font.font,
@@ -1332,8 +1355,61 @@ module View = {
 
     let iconColor = kind |> kindToColor(theme);
 
-    <View style={Styles.item(~isFocused, ~colors)}>
-      <View style={Styles.icon(~color=iconColor)}>
+    let textWidth = Service_Font.measure(~text, editorFont);
+    let labelWidth = int_of_float(ceil(textWidth +. 0.5));
+
+    let padding = rowHeight;
+    let availableWidth = width - rowHeight - padding - labelWidth;
+    let remainingWidth = availableWidth > 50 ? availableWidth : 0;
+
+    let textMarginTop = 2;
+
+    let maybeDetail =
+      switch (detail) {
+      | Some(detail) when isFocused && remainingWidth > 0 =>
+        let detail = StringEx.clamp(~characters=128, detail);
+        <View
+          style=Style.[
+            position(`Absolute),
+            top(textMarginTop),
+            bottom(0),
+            right(8),
+            width(remainingWidth - 8),
+            flexDirection(`Row),
+          ]>
+          <View style=Style.[flexGrow(1), flexShrink(1)] />
+          <View
+            style=Style.[
+              flexGrow(0),
+              flexShrink(0),
+              justifyContent(`Center),
+            ]>
+            <Text
+              style={Styles.detailText(~tokenTheme)}
+              fontFamily={editorFont.fontFamily}
+              fontSize={editorFont.fontSize}
+              text=detail
+            />
+          </View>
+        </View>;
+      | _ => React.empty
+      };
+
+    <Revery.UI.Components.Clickable
+      onClick
+      onMouseEnter
+      style={Styles.item(~rowHeight, ~isFocused, ~colors)}>
+      <View
+        style=Style.[
+          backgroundColor(iconColor),
+          position(`Absolute),
+          top(0),
+          left(0),
+          width(rowHeight),
+          height(rowHeight),
+          justifyContent(`Center),
+          alignItems(`Center),
+        ]>
         <Codicon
           icon
           color={colors.suggestWidgetBackground}
@@ -1341,7 +1417,15 @@ module View = {
           // Might be a bug with Revery font loading / re - rendering in this case?
         />
       </View>
-      <View style=Styles.label>
+      <View
+        style=Style.[
+          position(`Absolute),
+          top(textMarginTop),
+          bottom(0),
+          left(rowHeight + 8),
+          right(remainingWidth - rowHeight - 16),
+          justifyContent(`Center),
+        ]>
         <HighlightText
           highlights=highlight
           style={Styles.text(~colors, ())}
@@ -1351,43 +1435,64 @@ module View = {
           text
         />
       </View>
-    </View>;
+      maybeDetail
+    </Revery.UI.Components.Clickable>;
   };
 
   let detailView =
       (
-        ~text,
+        ~documentation,
         ~width,
         ~lineHeight,
+        ~uiFont: Oni_Core.UiFont.t,
         ~editorFont: Service_Font.font,
         ~colors,
+        ~colorTheme,
         ~tokenTheme,
         (),
-      ) =>
-    <View style={Styles.detail(~width, ~lineHeight, ~colors)}>
-      <Text
-        style={Styles.detailText(~tokenTheme)}
-        fontFamily={editorFont.fontFamily}
-        fontSize={editorFont.fontSize}
-        text
-      />
+      ) => {
+    let documentationElement =
+      Markdown.make(
+        ~markdown=Exthost.MarkdownString.toString(documentation),
+        ~fontFamily=uiFont.family,
+        ~colorTheme,
+        ~tokenTheme,
+        ~languageInfo=Exthost.LanguageInfo.initial,
+        ~defaultLanguage="reason",
+        ~codeFontFamily=editorFont.fontFamily,
+        ~grammars=Oni_Syntax.GrammarRepository.empty,
+        ~baseFontSize=10.,
+        ~codeBlockFontSize=editorFont.fontSize,
+        (),
+      );
+
+    <View style={Styles.documentation(~width, ~lineHeight, ~colors)}>
+      <View style=Style.[flexGrow(1), flexDirection(`Column)]>
+        documentationElement
+      </View>
     </View>;
+  };
 
   let make =
       (
+        ~buffer,
+        ~cursor: CharacterPosition.t,
         ~x: int,
         ~y: int,
         ~lineHeight: float,
         // TODO
+        ~dispatch,
         ~theme,
         ~tokenTheme,
-        ~editorFont,
+        ~editorFont: Service_Font.font,
         ~completions: model,
         (),
       ) => {
     /*let hoverEnabled =
       Configuration.getValue(c => c.editorHoverEnabled, state.configuration);*/
     let items = completions |> allItems;
+
+    let maybeLine = buffer |> Buffer.rawLine(cursor.line);
 
     let colors: Colors.t = {
       suggestWidgetSelectedBackground:
@@ -1405,62 +1510,150 @@ module View = {
 
     let focused = completions.selection;
 
-    let maxWidth =
-      items
-      |> Array.fold_left(
-           (maxWidth, (_loc, this: Filter.result(CompletionItem.t))) => {
-             let textWidth =
-               Service_Font.measure(~text=this.item.label, editorFont);
-             let thisWidth =
-               int_of_float(textWidth +. 0.5) + Constants.padding;
-             max(maxWidth, thisWidth);
-           },
-           Constants.maxCompletionWidth,
-         );
+    let width = 500;
+    let itemHeight = int_of_float(ceil(lineHeight));
+    let numberOfItemsToShow = completions.itemsToShow;
+    let maxHeight = itemHeight * numberOfItemsToShow;
+    let height = min(maxHeight, Array.length(items) * itemHeight);
 
-    let width = maxWidth + Constants.padding * 2;
-    let height =
-      min(Constants.maxHeight, Array.length(items) * Constants.itemHeight);
+    // TODO: Bring back detail view:
+    // 1) Align underneath completion
+    // 2) Test with providers that have large details (like Python)
+    let detail = React.empty;
+    // let detail =
+    //   switch (focused) {
+    //   | Some(index) =>
+    //     let focused: CompletionItem.t = items[index];
+    //     switch (focused.documentation) {
+    //     | Some(documentation) =>
+    //       <detailView
+    //         uiFont=Oni_Core.UiFont.default
+    //         documentation
+    //         width
+    //         lineHeight
+    //         colorTheme=theme
+    //         colors
+    //         tokenTheme
+    //         editorFont
+    //       />
+    //     | None => React.empty
+    //     };
+    //   | None => React.empty
+    //   };
 
-    let detail =
-      switch (focused) {
-      | Some(index) =>
-        let focused: Filter.result(CompletionItem.t) = items[index] |> snd;
-        switch (focused.item.detail) {
-        | Some(text) =>
-          <detailView text width lineHeight colors tokenTheme editorFont />
-        | None => React.empty
-        };
-      | None => React.empty
+    let innerStyle = Styles.innerPosition(~height, ~width, ~colors);
+
+    let innerStyleWithShadow =
+      if (completions.isShadowEnabled) {
+        let color = Feature_Theme.Colors.shadow.from(theme);
+        [
+          Style.boxShadow(
+            ~xOffset=4.,
+            ~yOffset=4.,
+            ~blurRadius=12.,
+            ~spreadRadius=0.,
+            ~color,
+          ),
+          ...innerStyle,
+        ];
+      } else {
+        innerStyle;
       };
 
-    <View style={Styles.outerPosition(~x, ~y)}>
-      <Opacity opacity=Constants.opacity>
-        <View
-          style={Styles.innerPosition(~height, ~width, ~lineHeight, ~colors)}>
-          <FlatList
-            rowHeight=Constants.itemHeight
-            initialRowsToRender=5
-            count={Array.length(items)}
-            theme
-            focused>
-            ...{index => {
-              let Filter.{highlight, item, _} = items[index] |> snd;
-              let CompletionItem.{label: text, kind, _} = item;
-              <itemView
-                isFocused={Some(index) == focused}
-                text
-                kind
-                highlight
-                theme
-                colors
-                editorFont
-              />;
-            }}
-          </FlatList>
-        </View>
-        detail
-      </Opacity>
+    let fontSize = editorFont.fontSize;
+    <View style={Styles.outerPosition(~x, ~y, ~fontSize, ~height, ~width)}>
+      <View style=innerStyleWithShadow>
+        <FlatList
+          rowHeight=itemHeight
+          initialRowsToRender=numberOfItemsToShow
+          count={Array.length(items)}
+          theme
+          focused>
+          ...{index => {
+            let item = items[index];
+            let CompletionItem.{label: text, kind, _} = item;
+
+            let highlight =
+              maybeLine
+              |> Option.map(line => {
+                   CompletionItemScorer.highlights(line, item, cursor)
+                 })
+              |> Option.value(~default=[]);
+
+            <itemView
+              isFocused={Some(index) == focused}
+              rowHeight=itemHeight
+              text
+              detail={item.detail}
+              kind
+              highlight
+              theme
+              tokenTheme
+              width
+              colors
+              editorFont
+              onMouseEnter={_ =>
+                dispatch(CompletionItemMouseEntered({index: index}))
+              }
+              onClick={_ => dispatch(CompletionItemClicked(item))}
+            />;
+          }}
+        </FlatList>
+      </View>
+      detail
     </View>;
+  };
+
+  module Overlay = {
+    let make =
+        (
+          ~activeEditorId,
+          ~buffer,
+          ~cursorPosition,
+          ~lineHeight,
+          ~toPixel,
+          ~theme,
+          ~tokenTheme,
+          ~model,
+          ~editorFont,
+          ~uiFont as _,
+          ~dispatch,
+          (),
+        ) =>
+      if (isActive(model)) {
+        let maybePixelPosition =
+          toPixel(~editorId=activeEditorId, cursorPosition);
+        maybePixelPosition
+        |> Option.map((pixelPosition: PixelPosition.t) => {
+             <View
+               onMouseUp={_ => dispatch(CompletionClickedOutside)}
+               style=Revery.UI.Style.[
+                 position(`Absolute),
+                 top(0),
+                 left(0),
+                 bottom(0),
+                 right(0),
+                 backgroundColor(Revery.Colors.transparentBlack),
+                 pointerEvents(`Allow),
+               ]>
+               {make(
+                  ~buffer,
+                  ~x=int_of_float(pixelPosition.x),
+                  ~y=int_of_float(pixelPosition.y),
+                  ~lineHeight,
+                  ~theme,
+                  ~tokenTheme,
+                  ~completions=model,
+                  ~editorFont,
+                  ~cursor=cursorPosition,
+                  ~dispatch,
+                  (),
+                )}
+             </View>
+           })
+        |> Option.value(~default=Revery.UI.React.empty);
+      } else {
+        Revery.UI.React.empty;
+      };
   };
 };

@@ -29,7 +29,13 @@ type msg = Msg.t;
 type outmsg =
   | Nothing
   | MouseHovered(option(CharacterPosition.t))
-  | MouseMoved(option(CharacterPosition.t));
+  | MouseMoved(option(CharacterPosition.t))
+  | ExecuteCommand(Exthost.Command.t)
+  | DisplayMenuAt({
+      menu: Oni_Core.ContextMenu.Schema.t,
+      xPos: int,
+      yPos: int,
+    });
 
 type model = Editor.t;
 
@@ -99,23 +105,52 @@ let update = (editor, msg) => {
   | HorizontalScrollbarMouseRelease
   | VerticalScrollbarMouseRelease
   | VerticalScrollbarMouseDown => (editor, Nothing)
-  | EditorMouseDown({altKey, time, pixelX, pixelY}) => (
-      editor |> Editor.mouseDown(~altKey, ~time, ~pixelX, ~pixelY),
-      Nothing,
-    )
+  | EditorMouseDown({
+      altKey,
+      time,
+      editorX,
+      editorY,
+      windowX,
+      windowY,
+      button,
+    }) =>
+    let outmsg =
+      button == Revery.MouseButton.BUTTON_RIGHT
+        ? DisplayMenuAt({
+            menu: Menu.rightClick,
+            xPos: int_of_float(windowX),
+            yPos: int_of_float(windowY),
+          })
+        : Nothing;
+    (
+      editor
+      |> Editor.mouseDown(
+           ~altKey,
+           ~time,
+           ~pixelX=editorX,
+           ~pixelY=editorY,
+           ~button,
+         ),
+      outmsg,
+    );
   | EditorMouseUp({altKey, time, pixelX, pixelY}) => (
       editor |> Editor.mouseUp(~altKey, ~time, ~pixelX, ~pixelY),
       Nothing,
     )
-  | InlineElementSizeChanged({key, line, uniqueId, height}) => (
-      Editor.setInlineElementSize(~key, ~line, ~uniqueId, ~height, editor),
-      Nothing,
+  | InlineElementClicked({command, _}) => (
+      editor,
+      switch (command) {
+      | Some(cmd) => ExecuteCommand(cmd)
+      | None => Nothing
+      },
     )
   | PreviewChanged(preview) => (
       Editor.setPreview(~preview, editor),
       Nothing,
     )
-  | Internal(msg) => (Editor.update(msg, editor), Nothing)
+  | Internal(msg) =>
+    let editor' = Editor.update(msg, editor);
+    (editor', Nothing);
   | EditorMouseMoved({time, pixelX, pixelY}) =>
     let editor' = editor |> Editor.mouseMove(~time, ~pixelX, ~pixelY);
 
@@ -127,6 +162,10 @@ let update = (editor, msg) => {
   | MouseHovered =>
     let maybeCharacter = Editor.getCharacterUnderMouse(editor);
     (editor, MouseHovered(maybeCharacter));
+
+  | BoundingBoxChanged({bbox}) =>
+    let editor' = Editor.setBoundingBox(bbox, editor);
+    (editor', Nothing);
 
   | ModeChanged({allowAnimation, mode, effects}) =>
     let handleScrollEffect = (~count, ~direction, editor) => {

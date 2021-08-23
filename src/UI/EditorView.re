@@ -31,11 +31,13 @@ module Parts = {
           ~renderOverlays,
           (),
         ) => {
+      let languageInfo =
+        state.languageSupport |> Feature_LanguageSupport.languageInfo;
       let languageConfiguration =
         buffer
         |> Oni_Core.Buffer.getFileType
         |> Oni_Core.Buffer.FileType.toString
-        |> Exthost.LanguageInfo.getLanguageConfiguration(state.languageInfo)
+        |> Exthost.LanguageInfo.getLanguageConfiguration(languageInfo)
         |> Option.value(~default=LanguageConfiguration.default);
 
       let editorDispatch = msg =>
@@ -56,7 +58,7 @@ module Parts = {
         buffer
         uiFont={state.uiFont}
         languageConfiguration
-        languageInfo={state.languageInfo}
+        languageInfo
         grammarRepository={state.grammarRepository}
         onEditorSizeChanged
         theme
@@ -101,7 +103,46 @@ module Parts = {
         Selectors.getBufferForEditor(state.buffers, editor)
         |> OptionEx.value_or_lazy(() => Buffer.empty(~font=state.editorFont));
 
-      let renderOverlays = (~gutterWidth as _) => React.empty;
+      let renderOverlays = (~gutterWidth) => {
+        let activeCursor = Feature_Editor.Editor.getPrimaryCursor(editor);
+        let ({x: pixelX, y: pixelY}: EditorCoreTypes.PixelPosition.t, _) =
+          Feature_Editor.Editor.bufferCharacterPositionToPixel(
+            ~position=activeCursor,
+            editor,
+          );
+
+        let lineHeight = Feature_Editor.Editor.lineHeightInPixels(editor);
+        let cursorPixelY = pixelY +. lineHeight |> int_of_float;
+        let cursorPixelX = pixelX +. gutterWidth |> int_of_float;
+        [
+          <Feature_LanguageSupport.Rename.View
+            x=cursorPixelX
+            y=cursorPixelY
+            theme
+            font=uiFont
+            dispatch={msg => dispatch(LanguageSupport(msg))}
+            model={state.languageSupport}
+          />,
+          <View
+            style=Revery.UI.Style.[
+              position(`Absolute),
+              top(0),
+              left(int_of_float(gutterWidth)),
+            ]>
+            <Feature_LanguageSupport.View.EditorWidgets
+              x={int_of_float(float(cursorPixelX) -. gutterWidth)}
+              y=cursorPixelY
+              editorId={Feature_Editor.Editor.getId(editor)}
+              theme
+              uiFont
+              editorFont
+              dispatch={msg => dispatch(LanguageSupport(msg))}
+              model={state.languageSupport}
+            />
+          </View>,
+        ]
+        |> React.listToElement;
+      };
 
       let isDark =
         state.colorTheme |> Feature_Theme.variant != ColorTheme.Light;
@@ -131,19 +172,15 @@ module Parts = {
         |> Option.value(~default=<Text text="Unable to load." />)
 
       | Terminal({id, _}) =>
-        state.terminals
-        |> Feature_Terminal.getTerminalOpt(id)
-        |> Option.map(terminal => {
-             let config = Selectors.configResolver(state);
-             <TerminalView
-               config
-               isActive
-               theme
-               font={state.terminalFont}
-               terminal
-             />;
-           })
-        |> Option.value(~default=React.empty)
+        let config = Selectors.configResolver(state);
+        <Feature_Terminal.TerminalView
+          config
+          isActive
+          theme
+          terminals={state.terminals}
+          id
+          dispatch={msg => dispatch(Actions.Terminal(msg))}
+        />;
 
       | Editor =>
         <Editor editor buffer state theme isActive dispatch renderOverlays />
@@ -163,6 +200,7 @@ module Parts = {
       | ExtensionDetails =>
         <Feature_Extensions.DetailsView
           model={state.extensions}
+          proxy={state.proxy |> Feature_Proxy.proxy}
           tokenTheme={state.colorTheme |> Feature_Theme.tokenColors}
           theme
           font=uiFont

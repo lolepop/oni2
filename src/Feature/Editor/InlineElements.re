@@ -18,20 +18,6 @@ module Constants = {
   let maxElementsToAnimate = 100;
 };
 
-type msg =
-  | OpacityAnimation({
-      key: string,
-      line: LineNumber.t,
-      uniqueId: string,
-      msg: Component_Animation.msg,
-    })
-  | HeightAnimation({
-      key: string,
-      line: LineNumber.t,
-      uniqueId: string,
-      msg: Component_Animation.msg,
-    });
-
 [@deriving show]
 type element = {
   key: string,
@@ -42,6 +28,9 @@ type element = {
   view:
     (~theme: Oni_Core.ColorTheme.Colors.t, ~uiFont: UiFont.t, unit) =>
     Revery.UI.element,
+  measure: (~width: int) => int,
+  width: int, // last measured width
+  command: option(Exthost.Command.t),
 };
 
 // A map of inline element key -> inline elements
@@ -421,38 +410,37 @@ let updateElement =
      );
 };
 
-let update = (msg, model) =>
-  switch (msg) {
-  | OpacityAnimation({key, uniqueId, line, msg}) =>
-    let updateOpacity = element => {
+let mapElements = (f, keyToElements) => {
+  keyToElements
+  |> IntMap.mapi((lineNumber, keyMap) => {
+       keyMap
+       |> KeyMap.mapi((key, idMap) => {
+            idMap
+            |> StringMap.mapi((uniqueId, element) => {
+                 f(~key, ~lineNumber, ~uniqueId, element)
+               })
+          })
+     });
+};
+
+let setWidth = (~getLeadingWhitespaceWidth, ~width, model) => {
+  let keyToElements = model.keyToElements;
+
+  let update = (~key as _, ~lineNumber, ~uniqueId as _, element: element) => {
+    let line = EditorCoreTypes.LineNumber.ofZeroBased(lineNumber);
+    let availableWidth =
+      int_of_float(width -. getLeadingWhitespaceWidth(line));
+    let calculatedHeight = element.measure(~width=availableWidth) |> float;
+
+    {
       ...element,
-      opacity: Component_Animation.update(msg, element.opacity),
+      opacity: Component_Animation.constant(1.0),
+      height: Component_Animation.constant(calculatedHeight),
+      width: availableWidth,
     };
-    updateElement(~key, ~uniqueId, ~line, ~f=updateOpacity, model);
-  | HeightAnimation({key, uniqueId, line, msg}) =>
-    let updateHeight = element => {
-      ...element,
-      height: Component_Animation.update(msg, element.height),
-    };
-    updateElement(~key, ~uniqueId, ~line, ~f=updateHeight, model);
   };
 
-let setSize = (~animated, ~key, ~line, ~uniqueId, ~height, model) => {
-  let setHeight = (curr: element) => {
-    {
-      ...curr,
-      opacity: animated ? curr.opacity : Component_Animation.constant(1.0),
-      height:
-        animated
-          ? Component_Animation.make(
-              Animation.expand(Component_Animation.get(curr.height), height),
-            )
-          : Component_Animation.constant(height),
-    };
-  };
-  let keyToElements' =
-    updateElement(~key, ~line, ~uniqueId, ~f=setHeight, model.keyToElements);
-  keyToElements' |> makeConsistent;
+  keyToElements |> mapElements(update) |> makeConsistent;
 };
 
 let allElementsForLine = (~line, {keyToElements, _}) => {
@@ -483,26 +471,39 @@ let getAllReservedSpace = ({cache, _}) => {
 };
 
 // When there is a buffer update, shift elements as needed
-let shift = (update: Oni_Core.BufferUpdate.t, model) => {
-  let startLineIdx = update.startLine |> LineNumber.toZeroBased;
-  let endLineIdx = update.endLine |> LineNumber.toZeroBased;
-
-  let delta = Array.length(update.lines) - (endLineIdx - startLineIdx);
-
-  if (update.isFull || delta == 0) {
-    model;
-  } else {
-    let keyToElements' =
-      model.keyToElements
-      |> IntMap.shift(
-           ~default=_ => None,
-           ~startPos=startLineIdx,
-           ~endPos=endLineIdx,
-           ~delta,
-         );
-
-    keyToElements' |> makeConsistent;
+let moveMarkers = (markerUpdate: Oni_Core.MarkerUpdate.t, model) => {
+  let shiftLines = (~afterLine, ~delta, keyToElements) => {
+    let line = EditorCoreTypes.LineNumber.toZeroBased(afterLine);
+    keyToElements |> IntMap.shift(~startPos=line, ~endPos=line, ~delta);
   };
+
+  let clearLine = (~line, keyToElements) => {
+    keyToElements
+    |> IntMap.remove(line |> EditorCoreTypes.LineNumber.toZeroBased);
+  };
+
+  let shiftCharacters =
+      (
+        ~line as _,
+        ~afterByte as _,
+        ~deltaBytes as _,
+        ~afterCharacter as _,
+        ~deltaCharacters as _,
+        keyToElements,
+      ) => {
+    keyToElements;
+  };
+
+  let keyToElements' =
+    MarkerUpdate.apply(
+      ~clearLine,
+      ~shiftLines,
+      ~shiftCharacters,
+      markerUpdate,
+      model.keyToElements,
+    );
+
+  keyToElements' |> makeConsistent;
 };
 
 let animate = (msg, model) => {

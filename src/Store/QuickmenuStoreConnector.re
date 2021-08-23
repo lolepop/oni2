@@ -26,7 +26,7 @@ module Internal = {
          Actions.{
            category: item.category,
            name: item.label,
-           command: () =>
+           command: _ =>
              switch (Command.Lookup.get(item.command, commands)) {
              | Some({msg: `Arg0(msg), _}) => msg
              | Some({msg: `Arg1(msgf), _}) => msgf(Json.Encode.null)
@@ -34,20 +34,9 @@ module Internal = {
              },
            icon: item.icon,
            highlight: [],
-           handle: None,
          }
        )
     |> Array.of_list;
-
-  let extensionItem: Exthost.QuickOpen.Item.t => Actions.menuItem =
-    item => {
-      category: None,
-      name: item.label,
-      handle: Some(item.handle),
-      icon: None,
-      highlight: [],
-      command: () => Actions.Noop,
-    };
 
   let commandPaletteItems = (commands, menus, contextKeys) => {
     let contextKeys =
@@ -69,9 +58,9 @@ module Internal = {
 };
 
 let start = () => {
-  let selectItemEffect = (item: Actions.menuItem) =>
+  let selectItemEffect = (~dir=None, item: Actions.menuItem) =>
     Isolinear.Effect.createWithDispatch(~name="quickmenu.selectItem", dispatch => {
-      let action = item.command();
+      let action = item.command(dir);
       dispatch(action);
     });
 
@@ -92,27 +81,26 @@ let start = () => {
       )
     });
 
-  exception MenuCancelled;
+  let makeBufferCommands =
+      (layout, workspace, languageInfo, iconTheme, buffers) => {
+    // Get visible buffers
 
-  let selectExtensionItemEffect = (~resolver, item: Actions.menuItem) =>
-    Isolinear.Effect.create(~name="quickmenu.selectExtensionItem", () => {
-      switch (item.handle) {
-      | Some(handle) => Lwt.wakeup(resolver, handle)
-      | None => Lwt.wakeup_exn(resolver, MenuCancelled)
-      }
-    });
-
-  let cancelExtensionMenuEffect = (~resolver) =>
-    Isolinear.Effect.create(~name="quickmenu.cancelExtensionMenu", () => {
-      Lwt.wakeup_exn(resolver, MenuCancelled)
-    });
-
-  let makeBufferCommands = (workspace, languageInfo, iconTheme, buffers) => {
+    let bufferIds: IntSet.t =
+      layout
+      |> Feature_Layout.activeLayoutGroups
+      |> List.map(Feature_Layout.Group.allEditors)
+      |> List.flatten
+      |> List.map(Feature_Editor.Editor.getBufferId)
+      |> List.fold_left(
+           (acc, curr) => {IntSet.add(curr, acc)},
+           IntSet.empty,
+         );
     // Get the current workspace, if available
     let maybeWorkspace = Feature_Workspace.openedFolder(workspace);
 
     buffers
     |> Feature_Buffers.all
+    |> List.filter(buffer => IntSet.mem(Buffer.getId(buffer), bufferIds))
     // Sort by most recerntly used
     |> List.fast_sort((a, b) =>
          - Float.compare(Buffer.getLastUsed(a), Buffer.getLastUsed(b))
@@ -130,8 +118,8 @@ let start = () => {
              Actions.{
                category: None,
                name,
-               command: () => {
-                 Actions.OpenFileByPath(path, None, None);
+               command: _ => {
+                 Actions.OpenFileByPath(path, SplitDirection.Current, None);
                },
                icon:
                  Component_FileExplorer.getFileIcon(
@@ -140,7 +128,6 @@ let start = () => {
                    path,
                  ),
                highlight: [],
-               handle: None,
              },
            maybeName,
            maybePath,
@@ -159,6 +146,7 @@ let start = () => {
         buffers,
         languageInfo,
         iconTheme,
+        layout,
         workspace,
         commands,
         menus,
@@ -178,7 +166,13 @@ let start = () => {
 
     | QuickmenuShow(EditorsPicker) =>
       let items =
-        makeBufferCommands(workspace, languageInfo, iconTheme, buffers);
+        makeBufferCommands(
+          layout,
+          workspace,
+          languageInfo,
+          iconTheme,
+          buffers,
+        );
 
       (
         Some({
@@ -189,21 +183,20 @@ let start = () => {
         Isolinear.Effect.none,
       );
 
-    | QuickmenuShow(Extension({id, hasItems, resolver})) => (
-        Some({
-          ...Quickmenu.defaults(Extension({id, hasItems, resolver})),
-          focused: Some(0),
-        }),
-        Isolinear.Effect.none,
-      )
-
     | QuickmenuShow(FilesPicker) =>
       if (Feature_Workspace.openedFolder(workspace) == None) {
         let items =
-          makeBufferCommands(workspace, languageInfo, iconTheme, buffers);
+          makeBufferCommands(
+            layout,
+            workspace,
+            languageInfo,
+            iconTheme,
+            buffers,
+          );
 
+        let focused = items != [||] ? Some(0) : None;
         (
-          Some({...Quickmenu.defaults(OpenBuffersPicker), items}),
+          Some({...Quickmenu.defaults(OpenBuffersPicker), items, focused}),
           Isolinear.Effect.none,
         );
       } else {
@@ -227,33 +220,19 @@ let start = () => {
         Isolinear.Effect.none,
       )
 
-    | QuickmenuShow(ThemesPicker(themes)) =>
-      let items =
-        themes
-        |> List.map((theme: ExtensionContributions.Theme.t) => {
-             Actions.{
-               category: Some("Theme"),
-               name: ExtensionContributions.Theme.label(theme),
-               command: () =>
-                 ThemeSelected(ExtensionContributions.Theme.id(theme)),
-               icon: None,
-               highlight: [],
-               handle: None,
-             }
-           })
-        |> Array.of_list;
-
-      (
-        Some({...Quickmenu.defaults(ThemesPicker(themes)), items}),
-        Isolinear.Effect.none,
-      );
-
     | QuickmenuShow(OpenBuffersPicker) =>
       let items =
-        makeBufferCommands(workspace, languageInfo, iconTheme, buffers);
+        makeBufferCommands(
+          layout,
+          workspace,
+          languageInfo,
+          iconTheme,
+          buffers,
+        );
+      let focused = items != [||] ? Some(0) : None;
 
       (
-        Some({...Quickmenu.defaults(OpenBuffersPicker), items}),
+        Some({...Quickmenu.defaults(OpenBuffersPicker), items, focused}),
         Isolinear.Effect.none,
       );
 
@@ -338,27 +317,6 @@ let start = () => {
         Isolinear.Effect.none,
       )
 
-    | QuickmenuUpdateExtensionItems({items, _}) => (
-        Option.map(
-          (state: Quickmenu.t) => {
-            switch (state.variant) {
-            | Extension({id, resolver, _}) => {
-                ...
-                  Quickmenu.defaults(
-                    Extension({id, hasItems: true, resolver}),
-                  ),
-                focused: None,
-                items:
-                  items |> List.map(Internal.extensionItem) |> Array.of_list,
-              }
-            | _ => state
-            }
-          },
-          state,
-        ),
-        Isolinear.Effect.none,
-      )
-
     | QuickmenuUpdateFilterProgress(items, progress) => (
         Option.map(
           (state: Quickmenu.t) => {
@@ -419,27 +377,13 @@ let start = () => {
         Isolinear.Effect.none,
       )
 
-    | ListSelect =>
+    | ListSelect(args) =>
       switch (state) {
       | Some({variant: Wildmenu(_), _}) => (None, executeVimCommandEffect)
 
-      | Some({
-          variant: Extension({resolver, _}),
-          items,
-          focused: Some(focused),
-          _,
-        }) =>
-        switch (items[focused]) {
-        | item => (None, selectExtensionItemEffect(~resolver, item))
-        | exception (Invalid_argument(_)) => (
-            None,
-            cancelExtensionMenuEffect(~resolver),
-          )
-        }
-
       | Some({items, focused: Some(focused), _}) =>
         switch (items[focused]) {
-        | item => (None, selectItemEffect(item))
+        | item => (None, selectItemEffect(~dir=Some(args.direction), item))
         | exception (Invalid_argument(_)) => (state, Isolinear.Effect.none)
         }
 
@@ -473,21 +417,13 @@ let start = () => {
     // Transition menus to this new-style quickmenu
     if (Feature_Quickmenu.isMenuOpen(state.newQuickmenu)) {
       switch (action) {
-      | ListFocusUp => (
-          {
-            ...state,
-            newQuickmenu: Feature_Quickmenu.prev(state.newQuickmenu),
-          },
-          Isolinear.Effect.none,
-        )
-      | ListFocusDown => (
-          {
-            ...state,
-            newQuickmenu: Feature_Quickmenu.next(state.newQuickmenu),
-          },
-          Isolinear.Effect.none,
-        )
-      | ListSelect =>
+      | ListFocusUp =>
+        let (newQuickmenu, eff) = Feature_Quickmenu.prev(state.newQuickmenu);
+        ({...state, newQuickmenu}, eff);
+      | ListFocusDown =>
+        let (newQuickmenu, eff) = Feature_Quickmenu.next(state.newQuickmenu);
+        ({...state, newQuickmenu}, eff);
+      | ListSelect(_) =>
         let (newQuickmenu, eff) =
           Feature_Quickmenu.select(state.newQuickmenu);
         ({...state, newQuickmenu}, eff);
@@ -506,8 +442,9 @@ let start = () => {
           state.quickmenu,
           action,
           state.buffers,
-          state.languageInfo,
+          state.languageSupport |> Feature_LanguageSupport.languageInfo,
           state.iconTheme,
+          state.layout,
           state.workspace,
           CommandManager.current(state),
           MenuManager.current(state),
@@ -530,9 +467,13 @@ let subscriptions = (ripgrep, dispatch) => {
   let (itemStream, addItems) = Isolinear.Stream.create();
 
   let filter = (query, items) => {
+    // HACK: Filter out spaces, so queries with spaces behave in a sane way.
+    // However, this won't be needed once Fzy has the full refine behavior,
+    // described in https://github.com/onivim/oni2/issues/3278
+    let queryWithoutSpaces = query |> StringEx.filterAscii(c => c != ' ');
     QuickmenuFilterSubscription.create(
       ~id="quickmenu-filter",
-      ~query,
+      ~query=queryWithoutSpaces,
       ~items=items |> Array.to_list, // TODO: This doesn't seem very efficient. Can Array.to_list be removed?
       ~itemStream,
       ~onUpdate=(items, ~progress) => {
@@ -550,11 +491,18 @@ let subscriptions = (ripgrep, dispatch) => {
     );
   };
 
-  let ripgrep = (workspace, languageInfo, iconTheme, configuration) => {
+  let ripgrep = (workspace, languageInfo, iconTheme, config) => {
     let filesExclude =
-      Feature_Configuration.Legacy.getValue(
-        c => c.filesExclude,
-        configuration,
+      Feature_Configuration.GlobalConfiguration.Files.exclude.get(config);
+
+    let followSymlinks =
+      Feature_Configuration.GlobalConfiguration.Search.followSymlinks.get(
+        config,
+      );
+
+    let useIgnoreFiles =
+      Feature_Configuration.GlobalConfiguration.Search.useIgnoreFiles.get(
+        config,
       );
 
     switch (Feature_Workspace.openedFolder(workspace)) {
@@ -569,7 +517,12 @@ let subscriptions = (ripgrep, dispatch) => {
         Actions.{
           category: None,
           name: Path.toRelative(~base=directory, fullPath),
-          command: () => Actions.OpenFileByPath(fullPath, None, None),
+          command: splitDir =>
+            switch (splitDir) {
+            | Some(dir) => Actions.OpenFileByPath(fullPath, dir, None)
+            | None =>
+              Actions.OpenFileByPath(fullPath, SplitDirection.Current, None)
+            },
           icon:
             Component_FileExplorer.getFileIcon(
               ~languageInfo,
@@ -577,11 +530,12 @@ let subscriptions = (ripgrep, dispatch) => {
               fullPath,
             ),
           highlight: [],
-          handle: None,
         };
       [
         RipgrepSubscription.create(
           ~id="workspace-search",
+          ~followSymlinks,
+          ~useIgnoreFiles,
           ~filesExclude,
           ~directory,
           ~ripgrep,
@@ -608,18 +562,14 @@ let subscriptions = (ripgrep, dispatch) => {
       | CommandPalette
       | EditorsPicker
       | OpenBuffersPicker => [filter(query, quickmenu.items)]
-      | ThemesPicker(_) => [filter(query, quickmenu.items)]
-
-      | Extension({hasItems, _}) =>
-        hasItems ? [filter(query, quickmenu.items)] : []
 
       | FilesPicker =>
         [filter(query, quickmenu.items)]
         @ ripgrep(
             state.workspace,
-            state.languageInfo,
+            state.languageSupport |> Feature_LanguageSupport.languageInfo,
             state.iconTheme,
-            state.config,
+            state |> Oni_Model.Selectors.configResolver,
           )
 
       | Wildmenu(_) => []

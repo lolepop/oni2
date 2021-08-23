@@ -24,9 +24,12 @@ type t =
   | EditorMouseEnter
   | EditorMouseDown({
       altKey: bool,
+      button: [@opaque] Revery.MouseButton.t,
       time: [@opaque] Revery.Time.t,
-      pixelX: float,
-      pixelY: float,
+      windowX: float,
+      windowY: float,
+      editorX: float,
+      editorY: float,
     })
   | EditorMouseMoved({
       time: [@opaque] Revery.Time.t,
@@ -47,10 +50,10 @@ type t =
       mode: [@opaque] Vim.Mode.t,
       effects: [@opaque] list(Vim.Effect.t),
     })
-  | InlineElementSizeChanged({
+  | InlineElementClicked({
       key: string,
       uniqueId: string,
-      line: EditorCoreTypes.LineNumber.t,
-      height: int,
+      command: option(Exthost.Command.t),
     })
+  | BoundingBoxChanged({bbox: [@opaque] Revery.Math.BoundingBox2d.t})
   | Internal(Editor.msg);

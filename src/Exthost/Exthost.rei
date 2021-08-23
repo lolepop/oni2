@@ -1,9 +1,28 @@
 open EditorCoreTypes;
 open Oni_Core;
+open Oniguruma;
 
 module Extension = Exthost_Extension;
 module Protocol = Exthost_Protocol;
 module Transport = Exthost_Transport;
+
+module Error: {
+  // Compatible error type for us with the extension host - must be in sync with the deserialization schema:
+  // https://github.com/onivim/vscode-exthost/blob/0d6b39803352369daaa97a444ff76352d8452be2/src/vs/workbench/services/extensions/common/rpcProtocol.ts#L380
+  [@deriving show]
+  type t = {
+    name: string,
+    message: string,
+    stack: string,
+  };
+
+  let encode: Json.encoder(t);
+};
+
+module CacheId: {
+  [@deriving show]
+  type t;
+};
 
 module ChainedCacheId: {
   [@deriving show]
@@ -27,11 +46,46 @@ module Label: {
   let decode: Json.decoder(t);
 };
 
+module LanguageConfiguration: {
+  module IndentAction: {
+    [@deriving show]
+    type t =
+      | Indent
+      | IndentOutdent
+      | Outdent;
+  };
+
+  module EnterAction: {
+    [@deriving show]
+    type t = {
+      indentAction: IndentAction.t,
+      appendText: option(string),
+      removeText: option(int),
+    };
+  };
+
+  module OnEnterRule: {
+    [@deriving show]
+    type t = {
+      beforeText: OnigRegExp.t,
+      afterText: option(OnigRegExp.t),
+      previousLineText: option(OnigRegExp.t),
+      action: EnterAction.t,
+    };
+  };
+
+  [@deriving show]
+  type t = {onEnterRules: list(OnEnterRule.t)};
+
+  let decode: Json.decoder(t);
+};
+
 module Command: {
   [@deriving show]
   type t = {
     id: option(string),
     label: option(Label.t),
+    arguments: list(Yojson.Safe.t),
   };
 
   let decode: Json.decoder(t);
@@ -96,6 +150,29 @@ module OneBasedRange: {
 
   let ofRange: CharacterRange.t => t;
   let toRange: t => CharacterRange.t;
+};
+
+// Implementation of 'IRange':
+// https://github.com/onivim/vscode-exthost/blob/0d6b39803352369daaa97a444ff76352d8452be2/src/vs/base/browser/ui/inputbox/inputBox.ts#L74
+module Span: {
+  type t = {
+    start: int,
+    stop: int,
+  };
+
+  let encode: Json.Encode.encoder(t);
+};
+
+module Selection: {
+  [@deriving show]
+  type t = {
+    selectionStartLineNumber: int,
+    selectionStartColumn: int,
+    positionLineNumber: int,
+    positionColumn: int,
+  };
+
+  let encode: Json.Encode.encoder(t);
 };
 
 module CodeLens: {
@@ -262,6 +339,7 @@ module Message: {
 };
 
 module RenameLocation: {
+  [@deriving show]
   type t = {
     range: OneBasedRange.t,
     text: string,
@@ -307,7 +385,7 @@ module SuggestItem: {
     filterText: option(string),
     insertText: option(string),
     insertTextRules: InsertTextRules.t,
-    suggestRange: option(SuggestRange.t),
+    suggestRange: SuggestRange.t,
     commitCharacters: list(string),
     additionalTextEdits: list(Edit.SingleEditOperation.t),
     command: option(Command.t),
@@ -357,8 +435,8 @@ module Progress: {
     [@deriving show]
     type t = {
       message: option(string),
-      increment: option(int),
-      total: option(int),
+      increment: option(float),
+      total: option(float),
     };
 
     let decode: Json.decoder(t);
@@ -738,6 +816,13 @@ module Configuration: {
 };
 
 module Diagnostic: {
+  module Tag: {
+    [@deriving show]
+    type t =
+      | Unused
+      | Deprecated;
+  };
+
   module Severity: {
     [@deriving show]
     type t =
@@ -750,10 +835,12 @@ module Diagnostic: {
     let ofInt: int => option(t);
     let max: (t, t) => t;
   };
+
   type t = {
     range: OneBasedRange.t,
     message: string,
     severity: Severity.t,
+    tags: list(Tag.t),
   };
 
   let decode: Json.decoder(t);
@@ -898,6 +985,27 @@ module Files: {
 
     let encode: Json.encoder(t);
   };
+
+  module FileSystemError: {
+    module Code: {
+      type t;
+      let fileExists: t;
+      let fileNotFound: t;
+      let fileNotADirectory: t;
+      let fileIsADirectory: t;
+      let fileExceedsMemoryLimit: t;
+      let fileTooLarge: t;
+      let noPermissions: t;
+      let unavailable: t;
+      let unknown: t;
+    };
+
+    type t;
+
+    let make: (~message: string=?, ~stack: string=?, Code.t) => t;
+
+    let encode: Json.encoder(t);
+  };
 };
 
 module ModelAddedDelta: {
@@ -963,10 +1071,29 @@ module TextEditor: {
       id: string,
       documentUri: Uri.t,
       options: ResolvedConfiguration.t,
+      selections: list(Selection.t),
       // TODO:
-      // selections: list(Selection.t),
       // visibleRanges: list(Range.t),
       // editorPosition: option(EditorViewColumn.t),
+    };
+
+    let encode: Json.encoder(t);
+  };
+
+  module SelectionChangeEvent: {
+    type t = {
+      selections: list(Selection.t),
+      source: option(string),
+    };
+
+    let encode: Json.encoder(t);
+  };
+
+  module PropertiesChangeData: {
+    type t = {
+      selections: option(SelectionChangeEvent.t),
+      // options: IResolvedTextEditorConfiguration
+      // visibleRanges: IRange[]
     };
 
     let encode: Json.encoder(t);
@@ -1008,19 +1135,22 @@ module OneBasedPosition: {
 };
 
 module ModelContentChange: {
+  [@deriving show]
   type t = {
     range: OneBasedRange.t,
     text: string,
     rangeLength: int,
   };
 
-  let ofBufferUpdate:
-    (~previousBuffer: Oni_Core.Buffer.t, BufferUpdate.t, Eol.t) => t;
+  let ofMinimalUpdates:
+    (~previousBuffer: Oni_Core.Buffer.t, ~eol: Eol.t, MinimalUpdate.t) =>
+    list(t);
 
   let to_yojson: t => Yojson.Safe.t;
 };
 
 module ModelChangedEvent: {
+  [@deriving show]
   type t = {
     changes: list(ModelContentChange.t),
     eol: Eol.t,
@@ -1090,17 +1220,102 @@ module Color: {
 };
 
 module WorkspaceEdit: {
-  module FileEdit: {type t;};
+  module IconPath: {
+    [@deriving show]
+    type t =
+      | IconId({iconId: string})
+      | Uri({uri: Oni_Core.Uri.t})
+      | LightDarkUri({
+          light: Oni_Core.Uri.t,
+          dark: Oni_Core.Uri.t,
+        });
+  };
+  module EntryMetadata: {
+    [@deriving show]
+    type t = {
+      needsConfirmation: bool,
+      label: string,
+      description: option(string),
+      iconPath: option(IconPath.t),
+    };
+  };
+  module SingleEdit: {
+    [@deriving show]
+    type t = {
+      range: OneBasedRange.t,
+      text: string,
+    };
+  };
 
-  module TextEdit: {type t;};
+  module TextEdit: {
+    type t = {
+      resource: Oni_Core.Uri.t,
+      edit: SingleEdit.t,
+      modelVersionId: option(int),
+      metadata: option(EntryMetadata.t),
+    };
+  };
+
+  module FileEdit: {type t;};
 
   type edit =
     | File(FileEdit.t)
     | Text(TextEdit.t);
 
+  [@deriving show]
   type t = {
     edits: list(edit),
     rejectReason: option(string),
+  };
+};
+
+module CodeAction: {
+  [@deriving show]
+  type t = {
+    chainedCacheId: option(ChainedCacheId.t),
+    title: string,
+    edit: option(WorkspaceEdit.t),
+    diagnostics: list(Diagnostic.t),
+    command: option(Command.t),
+    kind: option(string),
+    isPreferred: bool,
+    disabled: option(string),
+  };
+
+  module TriggerType: {
+    type t =
+      | Auto
+      | Manual;
+
+    let toInt: t => int;
+
+    let encode: Json.Encode.encoder(t);
+  };
+
+  module Context: {
+    type t = {
+      // TODO: What is this for?
+      only: option(string),
+      trigger: TriggerType.t,
+    };
+
+    let encode: Json.Encode.encoder(t);
+  };
+
+  module ProviderMetadata: {
+    type t = {
+      providedKinds: list(string),
+      providedDocumentation: StringMap.t(Command.t),
+    };
+  };
+
+  module List: {
+    type nonrec t = {
+      cacheId: CacheId.t,
+      actions: list(t),
+    };
+
+    let toDebugString: t => string;
   };
 };
 
@@ -1342,6 +1557,13 @@ module Msg: {
           supportsResolveDetails: bool,
           extensionId: string,
         })
+      | RegisterQuickFixSupport({
+          handle: int,
+          selector: DocumentSelector.t,
+          metadata: CodeAction.ProviderMetadata.t,
+          displayName: string,
+          supportsResolve: bool,
+        })
       | RegisterReferenceSupport({
           handle: int,
           selector: DocumentSelector.t,
@@ -1368,6 +1590,11 @@ module Msg: {
           selector: DocumentSelector.t,
           autoFormatTriggerCharacters: list(string),
           extensionId: ExtensionId.t,
+        })
+      | SetLanguageConfiguration({
+          handle: int,
+          languageId: string,
+          configuration: LanguageConfiguration.t,
         })
       | Unregister({handle: int});
   };
@@ -1531,6 +1758,18 @@ module Msg: {
         });
   };
 
+  module TextEditors: {
+    [@deriving show]
+    type msg =
+      | TryApplyEdits({
+          id: string,
+          modelVersionId: int,
+          // TODO:
+          //opts: ApplyEditOptions.t,
+          edits: list(Edit.SingleEditOperation.t),
+        });
+  };
+
   module OutputService: {
     [@deriving show]
     type msg =
@@ -1588,6 +1827,7 @@ module Msg: {
   module Workspace: {
     [@deriving show]
     type msg =
+      | SaveAll({includeUntitled: bool})
       | StartFileSearch({
           includePattern: option(string),
           //        includeFolder: option(Oni_Core.Uri.t),
@@ -1624,6 +1864,7 @@ module Msg: {
     | Storage(Storage.msg)
     | Telemetry(Telemetry.msg)
     | TerminalService(TerminalService.msg)
+    | TextEditors(TextEditors.msg)
     | Window(Window.msg)
     | Workspace(Workspace.msg)
     | Initialized
@@ -1649,14 +1890,16 @@ module Reply: {
 
   let error: string => t;
 
+  let errorJson: Yojson.Safe.t => t;
+
   let okEmpty: t;
 
   let okJson: Yojson.Safe.t => t;
 
   let okBuffer: Bytes.t => t;
-};
 
-module Middleware: {let download: Msg.DownloadService.msg => Lwt.t(Reply.t);};
+  let toDebugString: t => string;
+};
 
 module Client: {
   type t;
@@ -1748,8 +1991,14 @@ module Request: {
       (~delta: DocumentsAndEditorsDelta.t, Client.t) => unit;
   };
 
+  module Editors: {
+    let acceptEditorPropertiesChanged:
+      (~id: string, ~props: TextEditor.PropertiesChangeData.t, Client.t) =>
+      unit;
+  };
+
   module ExtensionService: {
-    let activateByEvent: (~event: string, Client.t) => unit;
+    let activateByEvent: (~event: string, Client.t) => Lwt.t(unit);
 
     let activate:
       (~extensionId: string, ~reason: ExtensionActivationReason.t, Client.t) =>
@@ -1776,6 +2025,33 @@ module Request: {
   };
 
   module LanguageFeatures: {
+    let provideCodeActionsByRange:
+      (
+        ~handle: int,
+        ~resource: Uri.t,
+        ~range: OneBasedRange.t,
+        ~context: CodeAction.Context.t,
+        Client.t
+      ) =>
+      Lwt.t(option(CodeAction.List.t));
+
+    let provideCodeActionsBySelection:
+      (
+        ~handle: int,
+        ~resource: Uri.t,
+        ~selection: Selection.t,
+        ~context: CodeAction.Context.t,
+        Client.t
+      ) =>
+      Lwt.t(option(CodeAction.List.t));
+
+    let resolveCodeAction:
+      (~handle: int, ~id: ChainedCacheId.t, Client.t) =>
+      Lwt.t(option(WorkspaceEdit.t));
+
+    let releaseCodeActions:
+      (~handle: int, ~cacheId: CacheId.t, Client.t) => unit;
+
     let provideCodeLenses:
       (~handle: int, ~resource: Uri.t, Client.t) =>
       Lwt.t(option(CodeLens.List.t));
@@ -1798,7 +2074,12 @@ module Request: {
       Lwt.t(SuggestResult.t);
 
     let resolveCompletionItem:
-      (~handle: int, ~chainedCacheId: ChainedCacheId.t, Client.t) =>
+      (
+        ~handle: int,
+        ~chainedCacheId: ChainedCacheId.t,
+        ~defaultRange: SuggestItem.SuggestRange.t,
+        Client.t
+      ) =>
       Lwt.t(SuggestItem.t);
 
     let releaseCompletionItems:
@@ -1880,7 +2161,7 @@ module Request: {
         ~position: OneBasedPosition.t,
         Client.t
       ) =>
-      Lwt.t(option(RenameLocation.t));
+      Lwt.t(result(option(RenameLocation.t), string));
 
     let provideTypeDefinition:
       (
@@ -1933,6 +2214,13 @@ module Request: {
         Client.t
       ) =>
       Lwt.t(option(list(Edit.SingleEditOperation.t)));
+  };
+
+  module QuickOpen: {
+    let onItemSelected: (~handle: int, Client.t) => unit;
+    let onDidChangeActive:
+      (~session: int, ~handles: list(int), Client.t) => unit;
+    let onDidAccept: (~session: int, Client.t) => unit;
   };
 
   module SCM: {

@@ -4,7 +4,7 @@ module Extension = Exthost_Extension;
 type t = {
   client: Protocol.t,
   lastRequestId: ref(int),
-  requestIdToReply: Hashtbl.t(int, Lwt.u(Yojson.Safe.json)),
+  requestIdToReply: Hashtbl.t(int, Lwt.u(Yojson.Safe.t)),
   initPromise: Lwt.t(unit),
 };
 
@@ -152,6 +152,16 @@ let start =
                 )
               );
               send(Outgoing.ReplyError({requestId, error: message}));
+
+            | ErrorJson({error}) =>
+              Log.tracef(m =>
+                m(
+                  "Responding to request %d with error: %s",
+                  requestId,
+                  error |> Yojson.Safe.to_string,
+                )
+              );
+              send(Outgoing.ReplyErrorJSON({requestId, error}));
             };
           };
 

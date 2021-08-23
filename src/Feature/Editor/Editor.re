@@ -3,6 +3,12 @@ open Oni_Core;
 open Utility;
 open Component_Animation;
 
+// A pixel position relative to the top, left of the current editor
+type relativePixelPosition = PixelPosition.t;
+
+// A pixel position relative to the top, left of the screen
+type absolutePixelPosition = PixelPosition.t;
+
 module GlobalState = {
   let lastId = ref(0);
 
@@ -22,6 +28,10 @@ type inlineElement = {
   view:
     (~theme: Oni_Core.ColorTheme.Colors.t, ~uiFont: UiFont.t, unit) =>
     Revery.UI.element,
+  measure: (~width: int) => int,
+  initialHeight: int,
+  initialWidth: int,
+  command: option(Exthost.Command.t),
 };
 
 module WrapMode = {
@@ -110,6 +120,8 @@ type t = {
   minimapMaxColumnWidth: int,
   minimapScrollY: float,
   mode: [@opaque] Vim.Mode.t,
+  pixelX: float,
+  pixelY: float,
   pixelWidth: int,
   pixelHeight: int,
   yankHighlight: option(yankHighlight),
@@ -134,7 +146,31 @@ type t = {
   // Animation
   isAnimationOverride: option(bool),
   animationNonce: int,
+  showUnused: bool,
+  showDeprecated: bool,
 };
+
+module ContextKeys = {
+  open WhenExpr.ContextKeys.Schema;
+
+  let editorLangId =
+    string("editorLangId", ({buffer, _}) => {
+      EditorBuffer.fileType(buffer) |> Oni_Core.Buffer.FileType.toString
+    });
+};
+
+let contextKeys = editor => {
+  WhenExpr.ContextKeys.(
+    ContextKeys.[editorLangId] |> Schema.fromList |> fromSchema(editor)
+  );
+};
+let setBoundingBox = (bbox, editor) => {
+  let (left, top, _, _) = Revery.Math.BoundingBox2d.getBounds(bbox);
+  {...editor, pixelY: top, pixelX: left};
+};
+
+let pixelX = ({pixelX, _}) => pixelX;
+let pixelY = ({pixelY, _}) => pixelY;
 
 let verticalScrollbarThickness = ({scrollbarVerticalWidth, _}) => scrollbarVerticalWidth;
 let horizontalScrollbarThickness = ({scrollbarHorizontalWidth, _}) => scrollbarHorizontalWidth;
@@ -179,18 +215,6 @@ let overrideAnimation = (~animated, editor) => {
 
 let isAnimatingScroll = ({scrollX, scrollY, _}) => {
   Spring.isActive(scrollX) || Spring.isActive(scrollY);
-};
-
-let getLeadingWhitespacePixels = (lineNumber, editor) => {
-  let buffer = editor.buffer;
-  let lineCount = EditorBuffer.numberOfLines(buffer);
-  let line = lineNumber |> EditorCoreTypes.LineNumber.toZeroBased;
-  if (line < 0 || line >= lineCount) {
-    0.;
-  } else {
-    let bufferLine = buffer |> EditorBuffer.line(line);
-    BufferLine.getLeadingWhitespacePixels(bufferLine);
-  };
 };
 
 let getBufferLineCount = ({buffer, _}) =>
@@ -333,6 +357,11 @@ let getLayout = editor => {
   layout;
 };
 
+let minimapWidthInPixels = editor => {
+  let layout: EditorLayout.t = editor |> getLayout;
+  float(layout.minimapWidthInPixels);
+};
+
 let viewLineToBufferLine = (viewLine, editor) => {
   let wrapping = editor.wrapState |> WrapState.wrapping;
   let bufferPosition: Wrapping.bufferPosition =
@@ -451,6 +480,13 @@ let bufferCharacterPositionToPixel =
   };
 };
 
+let relativeToAbsolutePixel = (relativePixel, editor) => {
+  PixelPosition.{
+    x: editor.pixelX +. relativePixel.x,
+    y: editor.pixelY +. relativePixel.y,
+  };
+};
+
 let getContentPixelWidth = editor => {
   let layout: EditorLayout.t = getLayout(editor);
   layout.bufferWidthInPixels;
@@ -512,6 +548,8 @@ let configure = (~config, editor) => {
     isScrollAnimated,
     scrollbarVerticalWidth,
     scrollbarHorizontalWidth,
+    showDeprecated: EditorConfiguration.showDeprecated.get(config),
+    showUnused: EditorConfiguration.showUnused.get(config),
     yankHighlightDuration,
   }
   |> setVerticalScrollMargin(~lines=scrolloff)
@@ -519,7 +557,12 @@ let configure = (~config, editor) => {
        ~enabled=EditorConfiguration.Minimap.enabled.get(config),
        ~maxColumn=EditorConfiguration.Minimap.maxColumn.get(config),
      )
-  |> setLineHeight(~lineHeight=EditorConfiguration.lineHeight.get(config))
+  |> setLineHeight(
+       ~lineHeight=
+         Feature_Configuration.GlobalConfiguration.Editor.lineHeight.get(
+           config,
+         ),
+     )
   |> setLineNumbers(
        ~lineNumbers=EditorConfiguration.lineNumbers.get(config),
      )
@@ -569,6 +612,8 @@ let create = (~config, ~buffer, ~preview: bool, ()) => {
             byte: ByteIndex.zero,
           },
       }),
+    pixelX: 0.,
+    pixelY: 0.,
     pixelWidth: 1,
     pixelHeight: 1,
     yankHighlight: None,
@@ -592,9 +637,15 @@ let create = (~config, ~buffer, ~preview: bool, ()) => {
 
     scrollbarHorizontalWidth: 8,
     scrollbarVerticalWidth: 15,
+
+    showDeprecated: true,
+    showUnused: true,
   }
   |> configure(~config);
 };
+
+let shouldShowDeprecated = ({showDeprecated, _}) => showDeprecated;
+let shouldShowUnused = ({showUnused, _}) => showUnused;
 
 let cursors = ({mode, _}) => Vim.Mode.cursors(mode);
 
@@ -702,7 +753,7 @@ let byteToCharacter = (position: BytePosition.t, editor) => {
 
   let bufferLineCount = EditorBuffer.numberOfLines(editor.buffer);
 
-  if (line < bufferLineCount) {
+  if (line >= 0 && line < bufferLineCount) {
     let bufferLine = EditorBuffer.line(line, editor.buffer);
     let character = BufferLine.getIndex(~byte=position.byte, bufferLine);
 
@@ -730,7 +781,7 @@ let characterToByte = (position: CharacterPosition.t, editor) => {
 
   let bufferLineCount = EditorBuffer.numberOfLines(editor.buffer);
 
-  if (line < bufferLineCount) {
+  if (line >= 0 && line < bufferLineCount) {
     let bufferLine = EditorBuffer.line(line, editor.buffer);
     let byteIndex =
       BufferLine.getByteFromIndex(~index=position.character, bufferLine);
@@ -804,7 +855,7 @@ let getCharacterAtPosition = (~position: CharacterPosition.t, {buffer, _}) => {
   let line = EditorCoreTypes.LineNumber.toZeroBased(position.line);
   let bufferLineCount = EditorBuffer.numberOfLines(buffer);
 
-  if (line < bufferLineCount) {
+  if (line >= 0 && line < bufferLineCount) {
     let bufferLine = EditorBuffer.line(line, buffer);
     try(Some(BufferLine.getUcharExn(~index=position.character, bufferLine))) {
     | _exn => None
@@ -822,7 +873,7 @@ let getCharacterBehindCursor = ({buffer, _} as editor) => {
 
     let bufferLineCount = EditorBuffer.numberOfLines(buffer);
 
-    if (line < bufferLineCount) {
+    if (line >= 0 && line < bufferLineCount) {
       let bufferLine = EditorBuffer.line(line, buffer);
       let index =
         max(
@@ -856,7 +907,7 @@ let getCharacterUnderCursor = ({buffer, _} as editor) => {
 
     let bufferLineCount = EditorBuffer.numberOfLines(buffer);
 
-    if (line < bufferLineCount) {
+    if (line >= 0 && line < bufferLineCount) {
       let bufferLine = EditorBuffer.line(line, buffer);
       let index = BufferLine.getIndex(~byte=cursor.byte, bufferLine);
       try(Some(BufferLine.getUcharExn(~index, bufferLine))) {
@@ -950,13 +1001,27 @@ let withSteadyCursor = (f, editor) => {
   };
 };
 
-let makeInlineElement = (~key, ~uniqueId, ~lineNumber, ~view) => {
+let makeInlineElement =
+    (
+      ~command=None,
+      ~key,
+      ~uniqueId,
+      ~lineNumber,
+      ~measure,
+      ~initialHeight,
+      ~initialWidth,
+      view,
+    ) => {
   hidden: false,
   reconcilerKey: Brisk_reconciler.Key.create(),
   key,
   uniqueId,
   lineNumber,
   view,
+  command,
+  measure,
+  initialHeight,
+  initialWidth,
 };
 
 let linesWithInlineElements = ({inlineElements, _}) => {
@@ -968,31 +1033,6 @@ let getInlineElements = (~line, {inlineElements, _}) => {
   InlineElements.allElementsForLine(~line, inlineElements);
 };
 
-let setInlineElementSize =
-    (~allowAnimation=true, ~key, ~line, ~uniqueId, ~height, editor) => {
-  let topBuffer = getTopVisibleBufferLine(editor);
-  let bottomBuffer = getBottomVisibleBufferLine(editor);
-  editor
-  |> withSteadyCursor(e =>
-       {
-         ...e,
-         inlineElements:
-           InlineElements.setSize(
-             ~animated=
-               allowAnimation
-               && editor.isAnimated
-               && line >= topBuffer
-               && line <= bottomBuffer,
-             ~key,
-             ~line,
-             ~uniqueId,
-             ~height=float(height),
-             e.inlineElements,
-           ),
-       }
-     );
-};
-
 let replaceInlineElements = (~key, ~startLine, ~stopLine, ~elements, editor) => {
   let elements': list(InlineElements.element) =
     elements
@@ -1001,9 +1041,15 @@ let replaceInlineElements = (~key, ~startLine, ~stopLine, ~elements, editor) => 
            key: inlineElement.key,
            uniqueId: inlineElement.uniqueId,
            line: inlineElement.lineNumber,
-           height: Component_Animation.make(Animation.expand(0., 0.)),
+           height:
+             Component_Animation.make(
+               Animation.expand(0., float(inlineElement.initialHeight)),
+             ),
+           width: inlineElement.initialWidth,
            view: inlineElement.view,
            opacity: Component_Animation.make(Animation.fadeIn),
+           command: inlineElement.command,
+           measure: inlineElement.measure,
          }
        );
   editor
@@ -1022,7 +1068,27 @@ let replaceInlineElements = (~key, ~startLine, ~stopLine, ~elements, editor) => 
      );
 };
 
-let setCodeLens = (~startLine, ~stopLine, ~handle, ~lenses, editor) => {
+let getLeadingWhitespacePixels = (lineNumber, editor) => {
+  let buffer = editor.buffer;
+  let lineCount = EditorBuffer.numberOfLines(buffer);
+  let line = lineNumber |> EditorCoreTypes.LineNumber.toZeroBased;
+  if (line < 0 || line >= lineCount) {
+    0.;
+  } else {
+    let bufferLine = buffer |> EditorBuffer.line(line);
+    BufferLine.getLeadingWhitespacePixels(bufferLine);
+  };
+};
+
+let setCodeLens =
+    (
+      ~uiFont: Oni_Core.UiFont.t,
+      ~startLine,
+      ~stopLine,
+      ~handle,
+      ~lenses,
+      editor,
+    ) => {
   let inlineElements =
     lenses
     |> List.map(lens => {
@@ -1030,20 +1096,44 @@ let setCodeLens = (~startLine, ~stopLine, ~handle, ~lenses, editor) => {
            Feature_LanguageSupport.CodeLens.lineNumber(lens)
            |> EditorCoreTypes.LineNumber.ofZeroBased;
          let uniqueId = Feature_LanguageSupport.CodeLens.text(lens);
-         let leftMargin =
-           getLeadingWhitespacePixels(lineNumber, editor) |> int_of_float;
          let view =
-           Feature_LanguageSupport.CodeLens.View.make(
-             ~leftMargin,
-             ~codeLens=lens,
-           );
+           Feature_LanguageSupport.CodeLens.View.make(~codeLens=lens);
+
+         // TODO: This has to be kept in sync with codelens rendering code.
+         // Investigate way to measure CodeLens element directly.
+         let measure = (~width) => {
+           let ret =
+             Revery.UI.measureText(
+               ~width,
+               ~style=Revery.UI.Style.[textWrap(Revery.TextWrapping.Wrap)],
+               ~fontFamily=uiFont.family,
+               ~fontWeight=Revery.Font.Weight.Normal,
+               ~fontSize=11.,
+               uniqueId,
+             );
+
+           ret + 4;
+         };
+
+         let leadingWhitespacePixels =
+           getLeadingWhitespacePixels(lineNumber, editor);
+
+         let bufferWidth = getContentPixelWidth(editor);
+         let width = int_of_float(bufferWidth -. leadingWhitespacePixels);
+         let initialHeight = measure(~width);
+
          makeInlineElement(
+           ~command=lens.command,
            ~key="codelens:" ++ string_of_int(handle),
            ~uniqueId,
+           ~measure,
+           ~initialHeight,
+           ~initialWidth=width,
            ~lineNumber,
-           ~view,
+           view,
          );
        });
+
   replaceInlineElements(
     ~startLine,
     ~stopLine,
@@ -1199,7 +1289,13 @@ let exposePrimaryCursor = (~disableAnimation=false, editor) =>
           editor,
         );
 
-      let scrollOffX = getCharacterWidth(editor) *. 2.;
+      // #3405 - When we're wrapping, don't consider horizontal scroll-off, otherwise
+      // the editor will seem to have less available width than it does in actuality,
+      // which could cause the editor to scroll even without wrapping.
+      let scrollOffX =
+        editor.wrapMode == WrapMode.Viewport
+          ? 0. : getCharacterWidth(editor) *. 2.;
+
       let scrollOffY =
         lineHeightInPixels(editor)
         *. float(max(editor.verticalScrollMargin, 0));
@@ -1315,39 +1411,8 @@ let getLeftVisibleColumn = view => {
 };
 
 let getTokenAt =
-    (~languageConfiguration, {line, character}: CharacterPosition.t, editor) => {
-  let lineNumber = line |> EditorCoreTypes.LineNumber.toZeroBased;
-
-  if (lineNumber < 0
-      || lineNumber >= EditorBuffer.numberOfLines(editor.buffer)) {
-    None;
-  } else {
-    let bufferLine = EditorBuffer.line(lineNumber, editor.buffer);
-    let f = uchar =>
-      LanguageConfiguration.isWordCharacter(uchar, languageConfiguration);
-    let startIndex =
-      BufferLine.traverse(
-        ~f,
-        ~direction=`Backwards,
-        ~index=character,
-        bufferLine,
-      )
-      |> Option.value(~default=character);
-    let stopIndex =
-      BufferLine.traverse(
-        ~f,
-        ~direction=`Forwards,
-        ~index=character,
-        bufferLine,
-      )
-      |> Option.value(~default=character);
-    Some(
-      CharacterRange.{
-        start: CharacterPosition.{line, character: startIndex},
-        stop: CharacterPosition.{line, character: stopIndex},
-      },
-    );
-  };
+    (~languageConfiguration, position: CharacterPosition.t, editor) => {
+  EditorBuffer.tokenAt(~languageConfiguration, position, editor.buffer);
 };
 
 let getContentPixelWidth = editor => {
@@ -1382,9 +1447,23 @@ let scrollToPixelY = (~animated, ~pixelY as newScrollY, editor) => {
   |> synchronizeMinimapScroll(~animated=!instant);
 };
 
-let scrollToLine = (~line, view) => {
-  let pixelY = float_of_int(line) *. lineHeightInPixels(view);
-  scrollToPixelY(~animated=true, ~pixelY, view);
+let halfViewportHeight = editor => {
+  let heightInPixels = float(editor.pixelHeight);
+  (heightInPixels -. lineHeightInPixels(editor)) /. 2.;
+};
+
+let scrollToLine = (~line, editor) => {
+  let inlineElementSpace =
+    InlineElements.getReservedSpace(
+      EditorCoreTypes.LineNumber.ofZeroBased(line),
+      editor.inlineElements,
+    );
+  let pixelY =
+    float_of_int(line)
+    *. lineHeightInPixels(editor)
+    +. inlineElementSpace
+    -. halfViewportHeight(editor);
+  scrollToPixelY(~animated=true, ~pixelY, editor);
 };
 
 let scrollToPixelX = (~animated, ~pixelX as newScrollX, editor) => {
@@ -1534,12 +1613,10 @@ let scrollCenterCursorVertically = editor => {
       editor,
     );
 
-  let heightInPixels = float(editor.pixelHeight);
   let pixelY =
     pixelPosition.y
     +. Spring.getTarget(editor.scrollY)
-    -. heightInPixels
-    /. 2.;
+    -. halfViewportHeight(editor);
   scrollToPixelY(~animated=true, ~pixelY, editor);
 };
 
@@ -1627,7 +1704,18 @@ let setSize = (~pixelWidth, ~pixelHeight, originalEditor) => {
       editor.wrapState,
     );
 
-  let editor' = {...editor, wrapState};
+  let getLeadingWhitespaceWidth = line => {
+    getLeadingWhitespacePixels(line, editor);
+  };
+
+  let inlineElements =
+    InlineElements.setWidth(
+      ~getLeadingWhitespaceWidth,
+      ~width=contentPixelWidth,
+      editor.inlineElements,
+    );
+
+  let editor' = {...editor, inlineElements, wrapState};
 
   // If we hadn't measured before, make sure the cursor is in view
   if (!hasSetSize(originalEditor)) {
@@ -1677,12 +1765,107 @@ let unprojectToPixel =
 
 let getBufferId = ({buffer, _}) => EditorBuffer.id(buffer);
 
-let updateBuffer = (~update, ~buffer, editor) => {
+let updateBuffer = (~update, ~markerUpdate, ~buffer, editor) => {
+  let shiftCursor = (f, mode) => {
+    switch ((mode: Vim.Mode.t)) {
+    // Don't touch command-line mode
+    | CommandLine(orig) => Vim.Mode.CommandLine(orig)
+
+    // Cancel pending operator, if we have a shift
+    | Operator({cursor, _}) => Vim.Mode.Normal({cursor: f(cursor)})
+    | Normal({cursor}) => Normal({cursor: f(cursor)})
+    | Visual(curr) =>
+      Visual(
+        Vim.VisualRange.{
+          ...curr,
+          anchor: f(curr.anchor),
+          cursor: f(curr.cursor),
+        },
+      )
+    | Select({ranges}) =>
+      // TODO: Properly shift ranges
+      Select({ranges: ranges})
+    | Replace({cursor}) => Replace({cursor: f(cursor)})
+    | Insert({cursors}) => Insert({cursors: List.map(f, cursors)})
+    };
+  };
+
+  let normalize = (bytePosition: BytePosition.t) => {
+    let byte' =
+      if (bytePosition.byte < ByteIndex.zero) {
+        ByteIndex.zero;
+      } else {
+        bytePosition.byte;
+      };
+
+    let line' =
+      if (bytePosition.line < EditorCoreTypes.LineNumber.zero) {
+        EditorCoreTypes.LineNumber.zero;
+      } else {
+        bytePosition.line;
+      };
+    BytePosition.{line: line', byte: byte'};
+  };
+
+  // Check if we _should_ shift cursor
+  let shiftLines = (~afterLine, ~delta: int, mode) => {
+    let moveByte = (bytePosition: BytePosition.t) =>
+      if (bytePosition.line >= afterLine) {
+        BytePosition.{
+          ...bytePosition,
+          line: EditorCoreTypes.LineNumber.(bytePosition.line + delta),
+        }
+        |> normalize;
+      } else {
+        bytePosition;
+      };
+    shiftCursor(moveByte, mode);
+  };
+
+  let clearLine = (~line as _, mode) => mode;
+
+  let shiftCharacters =
+      (
+        ~line,
+        ~afterByte,
+        ~deltaBytes,
+        ~afterCharacter as _,
+        ~deltaCharacters as _,
+        mode,
+      ) => {
+    let moveByte = (bytePosition: BytePosition.t) =>
+      if (bytePosition.line == line && bytePosition.byte >= afterByte) {
+        BytePosition.{
+          ...bytePosition,
+          byte: ByteIndex.(bytePosition.byte + deltaBytes),
+        }
+        |> normalize;
+      } else {
+        bytePosition;
+      };
+    shiftCursor(moveByte, mode);
+  };
+
+  let mode' =
+    if (BufferUpdate.(update.shouldAdjustCursorPosition)) {
+      MarkerUpdate.apply(
+        ~clearLine,
+        ~shiftLines,
+        ~shiftCharacters,
+        markerUpdate,
+        editor.mode,
+      );
+    } else {
+      editor.mode;
+    };
+
   {
     ...editor,
+    mode: mode',
     buffer,
     wrapState: WrapState.update(~update, ~buffer, editor.wrapState),
-    inlineElements: InlineElements.shift(update, editor.inlineElements),
+    inlineElements:
+      InlineElements.moveMarkers(markerUpdate, editor.inlineElements),
   };
 };
 
@@ -1777,7 +1960,7 @@ let moveScreenLines = (~position, ~count, editor) => {
   );
 };
 
-let mouseDown = (~altKey, ~time, ~pixelX, ~pixelY, editor) => {
+let mouseDown = (~altKey, ~time, ~pixelX, ~pixelY, ~button, editor) => {
   ignore(altKey);
   ignore(time);
   let bytePosition: BytePosition.t =
@@ -1793,12 +1976,9 @@ let mouseDown = (~altKey, ~time, ~pixelX, ~pixelY, editor) => {
     } else {
       Vim.Mode.Normal({cursor: bytePosition});
     };
-  {
-    ...editor,
-    mode,
-    isMouseDown: true,
-    mouseDownBytePosition: Some(bytePosition),
-  };
+  let isMouseDown = button != Revery.MouseButton.BUTTON_RIGHT;
+  let mouseDownBytePosition = isMouseDown ? Some(bytePosition) : None;
+  {...editor, mode, isMouseDown, mouseDownBytePosition};
 };
 
 let getCharacterUnderMouse = editor => {
@@ -1957,18 +2137,6 @@ let isMouseDown = ({isMouseDown, _}) => isMouseDown;
 
 let lastMouseMoveTime = ({lastMouseMoveTime, _}) => lastMouseMoveTime;
 
-let getLeadingWhitespacePixels = (lineNumber, editor) => {
-  let buffer = editor.buffer;
-  let lineCount = EditorBuffer.numberOfLines(buffer);
-  let line = lineNumber |> EditorCoreTypes.LineNumber.toZeroBased;
-  if (line < 0 || line >= lineCount) {
-    0.;
-  } else {
-    let bufferLine = buffer |> EditorBuffer.line(line);
-    BufferLine.getLeadingWhitespacePixels(bufferLine);
-  };
-};
-
 let autoScroll = (~deltaPixelX: float, ~deltaPixelY: float, editor) => {
   // Scroll editor to new position
   let editor' =
@@ -2064,6 +2232,19 @@ let isMousePressedNearLeftEdge = ({isMouseDown, lastMouseScreenPosition, _}) => 
        int_of_float(x) < Constants.mouseAutoScrollBorder
      })
   |> Option.value(~default=false);
+};
+
+let gutterWidth = (~editorFont: Service_Font.font, {lineNumbers, buffer, _}) => {
+  let lineNumberWidth =
+    lineNumbers != `Off
+      ? LineNumber.getLineNumberPixelWidth(
+          ~lines=EditorBuffer.numberOfLines(buffer),
+          ~fontPixelWidth=editorFont.underscoreWidth,
+          (),
+        )
+      : 0.0;
+
+  lineNumberWidth +. Constants.diffMarkerWidth +. Constants.gutterMargin;
 };
 
 let isMousePressedNearRightEdge =

@@ -273,8 +273,15 @@ let _onAutocommand = (autoCommand: Types.autocmd, buffer: Buffer.t) => {
 
 let _onBufferChanged =
     (buffer: Buffer.t, startLine: int, endLine: int, extra: int) => {
+  let shouldAdjustCursorPosition = BufferUpdateTracker.shouldAdjustCursors();
   let update =
-    BufferUpdate.createIncremental(~buffer, ~startLine, ~endLine, ~extra);
+    BufferUpdate.createIncremental(
+      ~shouldAdjustCursorPosition,
+      ~buffer,
+      ~startLine,
+      ~endLine,
+      ~extra,
+    );
 
   BufferInternal.notifyUpdate(buffer);
 
@@ -458,8 +465,8 @@ let _onGoto = (_line: int, _column: int, gotoType: Goto.effect) => {
   queueEffect(Effect.Goto(gotoType));
 };
 
-let _onOutput = (cmd, output) => {
-  queueEffect(Effect.Output({cmd, output}));
+let _onOutput = (cmd, output, isSilent) => {
+  queueEffect(Effect.Output({cmd, output, isSilent}));
 };
 
 let _onClear = (target: Clear.target, count: int) => {
@@ -503,21 +510,11 @@ let _colorSchemesGet = pattern => {
 };
 
 let _onMacroStartRecording = (register: char) => {
-  queue(() => {
-    Event.dispatch(
-      Effect.MacroRecordingStarted({register: register}),
-      Listeners.effect,
-    )
-  });
+  queueEffect(MacroRecordingStarted({register: register}));
 };
 
 let _onMacroStopRecording = (register: char, value: option(string)) => {
-  queue(() => {
-    Event.dispatch(
-      Effect.MacroRecordingStopped({register, value}),
-      Listeners.effect,
-    )
-  });
+  queueEffect(MacroRecordingStopped({register, value}));
 };
 
 let _onInputMap = (mapping: Mapping.t) => {
@@ -895,6 +892,7 @@ let inputCommon = (~inputFn, ~context=Context.current(), v: string) => {
                Undo.saveRegion(lineNumber - 1, lineNumber + 1);
                // Clear out range, and replace with current line
                Buffer.setLines(
+                 ~shouldAdjustCursors=false,
                  ~start=range.start.line,
                  ~stop=EditorCoreTypes.LineNumber.(range.start.line + 1),
                  ~lines=[|updatedLine|],
@@ -974,6 +972,16 @@ let command = (~context=Context.current(), v) => {
     ~context,
     () => {
       Native.vimCommand(v);
+      Mode.current();
+    },
+  );
+};
+
+let commands = (~context=Context.current(), lines) => {
+  runWith(
+    ~context,
+    () => {
+      Native.vimCommands(lines);
       Mode.current();
     },
   );

@@ -15,6 +15,9 @@ let current = {
       |> Command.Lookup.map(msg => Actions.Configuration(msg)),
       Feature_Buffers.Contributions.commands
       |> Command.Lookup.map(msg => Actions.Buffers(msg)),
+      Feature_Diagnostics.Contributions.commands
+      |> Command.Lookup.fromList
+      |> Command.Lookup.map(msg => Actions.Diagnostics(msg)),
       Feature_Logging.Contributions.commands
       |> Command.Lookup.fromList
       |> Command.Lookup.map(msg => Actions.Logging(msg)),
@@ -24,9 +27,15 @@ let current = {
       Feature_Help.Contributions.commands
       |> Command.Lookup.fromList
       |> Command.Lookup.map(msg => Actions.Help(msg)),
+      Feature_Vim.Contributions.commands
+      |> Command.Lookup.fromList
+      |> Command.Lookup.map(msg => Actions.Vim(msg)),
       Feature_Zen.Contributions.commands
       |> Command.Lookup.fromList
       |> Command.Lookup.map(msg => Actions.Zen(msg)),
+      Feature_Keyboard.Contributions.commands
+      |> Command.Lookup.fromList
+      |> Command.Lookup.map(msg => Actions.Keyboard(msg)),
     ]);
 
   state => {
@@ -57,10 +66,14 @@ let current = {
       )
       |> Command.Lookup.fromList
       |> Command.Lookup.map(msg => Actions.FileExplorer(msg)),
+      Feature_LanguageSupport.Contributions.commands(state.languageSupport)
+      |> Command.Lookup.fromList
+      |> Command.Lookup.map(msg => Actions.LanguageSupport(msg)),
       Feature_Pane.Contributions.commands(
         ~isFocused={
           focus == Focus.Pane;
         },
+        state,
         state.pane,
       )
       |> Command.Lookup.fromList

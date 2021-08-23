@@ -2,6 +2,7 @@ open Revery.UI;
 
 open Oni_Core;
 open Oni_Model;
+open Oni_Components;
 
 module FontAwesome = Oni_Components.FontAwesome;
 module FontIcon = Oni_Components.FontIcon;
@@ -48,17 +49,17 @@ module Styles = {
     ];
   };
 
-  let notification = (~scale, ~theme, ~padding) => [
+  let notification = (~theme, ~padding as p) => [
     position(`Absolute),
     bottom(4),
     right(4),
-    width(15),
-    height(15),
-    paddingTop(padding),
-    paddingLeft(padding),
+    minWidth(15),
+    height(16),
+    flexDirection(`Row),
+    justifyContent(`Center),
+    padding(p),
     borderRadius(8.),
     backgroundColor(BadgeColors.background.from(theme)),
-    transform([Revery.UI.Transform.Scale(scale)]),
   ];
 };
 module Animations = {
@@ -71,12 +72,12 @@ module Animations = {
 };
 
 module Notification = {
-  let%component make = (~notification, ~theme, ~font: UiFont.t, ()) => {
+  let make = (~notification, ~theme, ~font: UiFont.t, ()) => {
     let foregroundColor = BadgeColors.foreground.from(theme);
     let (padding, inner) =
       switch (notification) {
       | Count(count) =>
-        let text = count > 9 ? "9+" : string_of_int(count);
+        let text = count > 999 ? "999+" : string_of_int(count);
         (
           2,
           <Text
@@ -87,20 +88,14 @@ module Notification = {
           />,
         );
       | InProgress => (
-          3,
-          <Codicon icon=Codicon.clock fontSize=10. color=foregroundColor />,
+          2,
+          <View style=Style.[marginTop(1), marginLeft(1)]>
+            <Codicon icon=Codicon.clock fontSize=10. color=foregroundColor />
+          </View>,
         )
       };
 
-    let%hook (scale, _state, _reset) =
-      Hooks.animation(
-        ~name="Notification Appear",
-        Animations.appear,
-        ~active=true,
-      );
-    <View style={Styles.notification(~scale, ~theme, ~padding)}>
-      inner
-    </View>;
+    <View style={Styles.notification(~theme, ~padding)}> inner </View>;
   };
 };
 
@@ -111,8 +106,7 @@ let%component item =
                 ~sideBar,
                 ~theme,
                 ~isActive,
-                ~icon,
-                ~iconStyle=`Solid,
+                ~icon: SVGIcon.t,
                 ~font: UiFont.t,
                 (),
               ) => {
@@ -120,16 +114,8 @@ let%component item =
   let onMouseOver = _ => setHovered(_ => true);
   let onMouseOut = _ => setHovered(_ => false);
 
-  let icon = () => {
-    let color = isActive ? Colors.foreground : Colors.inactiveForeground;
-    let fontFamily =
-      switch (iconStyle) {
-      | `Solid => FontAwesome.FontFamily.solid
-      | `Regular => FontAwesome.FontFamily.regular
-      };
-
-    <FontIcon fontFamily color={color.from(theme)} fontSize=22. icon />;
-  };
+  let color =
+    (isActive ? Colors.foreground : Colors.inactiveForeground).from(theme);
 
   let notificationElement =
     switch (notification) {
@@ -142,7 +128,7 @@ let%component item =
       sneakId="item"
       onClick
       style={Styles.item(~isHovered, ~isActive, ~theme, ~sideBar)}>
-      <icon />
+      <icon size=24 strokeWidth=2 color />
       notificationElement
     </Sneakable>
   </View>;
@@ -167,6 +153,7 @@ let onExtensionsClick = _ => {
 let make =
     (
       ~theme: ColorTheme.Colors.t,
+      ~scm: Feature_SCM.model,
       ~sideBar: Feature_SideBar.model,
       ~extensions: Feature_Extensions.model,
       ~font: UiFont.t,
@@ -177,6 +164,10 @@ let make =
   let extensionNotification =
     Feature_Extensions.isBusy(extensions) ? Some(InProgress) : None;
 
+  let scmCount = Feature_SCM.count(scm);
+
+  let scmNotification = scmCount > 0 ? Some(Count(scmCount)) : None;
+
   <View style={Styles.container(~theme)}>
     <item
       font
@@ -184,8 +175,7 @@ let make =
       sideBar
       theme
       isActive={isSidebarVisible(FileExplorer)}
-      icon=FontAwesome.copy
-      iconStyle=`Regular
+      icon=FeatherIcons.folder
     />
     <item
       font
@@ -193,7 +183,7 @@ let make =
       sideBar
       theme
       isActive={isSidebarVisible(Search)}
-      icon=FontAwesome.search
+      icon=FeatherIcons.search
     />
     <item
       font
@@ -201,7 +191,8 @@ let make =
       sideBar
       theme
       isActive={isSidebarVisible(SCM)}
-      icon=FontAwesome.codeBranch
+      icon=FeatherIcons.gitPullRequest
+      notification=?scmNotification
     />
     <item
       font
@@ -209,7 +200,7 @@ let make =
       sideBar
       theme
       isActive={isSidebarVisible(Extensions)}
-      icon=FontAwesome.thLarge
+      icon=FeatherIcons.package
       notification=?extensionNotification
     />
   </View>;

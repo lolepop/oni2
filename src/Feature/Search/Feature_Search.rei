@@ -28,20 +28,20 @@ type outmsg =
 
 let update: (~previewEnabled: bool, model, msg) => (model, option(outmsg));
 
-let resetFocus: model => model;
+let resetFocus: (~query: option(string), model) => model;
 
-let subscriptions:
+let sub:
   (
     ~config: Oni_Core.Config.resolver,
     ~workingDirectory: string,
-    Ripgrep.t,
-    msg => unit,
+    ~setup: Setup.t,
     model
   ) =>
-  list(Subscription.t(msg));
+  Isolinear.Sub.t(msg);
 
 let make:
   (
+    ~config: Oni_Core.Config.resolver,
     ~theme: ColorTheme.Colors.t,
     ~uiFont: UiFont.t,
     ~iconTheme: IconTheme.t,
@@ -58,4 +58,5 @@ module Contributions: {
   let commands: (~isFocused: bool) => list(Command.t(msg));
   let contextKeys: (~isFocused: bool, model) => WhenExpr.ContextKeys.t;
   let configuration: list(Config.Schema.spec);
+  let keybindings: list(Feature_Input.Schema.keybinding);
 };

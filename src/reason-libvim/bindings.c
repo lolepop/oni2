@@ -723,7 +723,7 @@ void onCursorMoveScreenLine(screenLineMotion_T motion, int count, linenr_T start
 
 }
 
-void onOutput(char_u *cmd, char_u* output) {
+void onOutput(char_u *cmd, char_u* output, int isSilent) {
   CAMLparam0();
   CAMLlocal2(vStr, vMaybeOutput);
 
@@ -744,7 +744,7 @@ void onOutput(char_u *cmd, char_u* output) {
    if (lv_onOutput == NULL) {
      lv_onOutput = caml_named_value("lv_onOutput");
    }
-  caml_callback2(*lv_onOutput, vStr, vMaybeOutput);
+  caml_callback3(*lv_onOutput, vStr, vMaybeOutput, Val_bool(isSilent));
 
   CAMLreturn0;
 }
@@ -980,6 +980,27 @@ CAMLprim value libvim_vimCommand(value v) {
   vimExecute(s);
   return Val_unit;
 }
+
+CAMLprim value libvim_vimCommands(value vLines) {
+  CAMLparam1(vLines);
+
+  int lineCount = Wosize_val(vLines);
+
+  char_u **lines = malloc(sizeof(char_u *) * lineCount);
+  for (int i = 0; i < lineCount; i++) {
+    const char *sz = String_val(Field(vLines, i));
+    lines[i] = malloc((sizeof(char) * strlen(sz)) + 1);
+    strcpy((char *)lines[i], sz);
+  }
+  vimExecuteLines(lines, lineCount);
+
+  for (int i = 0; i < lineCount; i++) {
+    free(lines[i]);
+  }
+  free(lines);
+  CAMLreturn(Val_unit);
+}
+
 
 CAMLprim value libvim_vimGetMode(value unit) {
   int mode = vimGetMode();

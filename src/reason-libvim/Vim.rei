@@ -320,12 +320,15 @@ module Buffer: {
       ~undoable: bool=?,
       ~start: LineNumber.t=?,
       ~stop: LineNumber.t=?,
+      ~shouldAdjustCursors: bool,
       ~lines: array(string),
       t
     ) =>
     unit;
 
-  let applyEdits: (~edits: list(Edit.t), t) => result(unit, string);
+  let applyEdits:
+    (~shouldAdjustCursors: bool, ~edits: list(Edit.t), t) =>
+    result(unit, string);
 
   let onLineEndingsChanged:
     Listeners.bufferLineEndingsChangedListener => Event.unsubscribe;
@@ -519,6 +522,7 @@ module Effect: {
     | Output({
         cmd: string,
         output: option(string),
+        isSilent: bool,
       })
     | WindowSplit(Split.t);
 };
@@ -565,6 +569,9 @@ You may use any valid Ex command, although you must omit the leading semicolon.
 The command [cmd] is processed synchronously.
 */
 let command: (~context: Context.t=?, string) => (Context.t, list(Effect.t));
+
+let commands:
+  (~context: Context.t=?, array(string)) => (Context.t, list(Effect.t));
 
 /**
 [onDirectoryChanged(f)] registers a directory changed listener [f].

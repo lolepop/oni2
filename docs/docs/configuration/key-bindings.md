@@ -40,6 +40,23 @@ There are a set of default rules provided by Onivim, but the customized rules ar
 
 The `key` parameter supports both _Vim style_ and _VSCode style_ key bindings.
 
+### Remaps
+
+Remaps can also be specified via the same keybindings configuration file.
+
+Remapping keys tend to be more natural for users coming from Vim, and they allow matching a key sequence and then producing a new set of key presses.
+
+Remaps require 3 properties:
+- `from` - a key, specified in the same format as the `key` parameter
+- `to` - a key, specified in the same format as the `key` parameter
+- `when` - a context clause describing when the remapping should take effect.
+
+An example of a remap would be:
+```json
+{ "from": "jj", "to": "<esc>", "when": "editorTextFocus && insertMode" }
+```
+(which is functionally equivalent to `:inoremap jj <ESC>`)
+
 #### Vim style
 
 Vim-style keybindings are surrounded by `<` and `>`, and allow the following modifiers:
@@ -115,11 +132,23 @@ Common contexts with VSCode:
 
 | Context Name | True When | 
 | --- | --- |
+| `editorFocus` | An editor has focus |
 | `editorTextFocus` | An editor has focus |
+| `hasSearchResults` | Search results are available |
 | `inSnippetMode` | A snippet session is currently active |
+| `renameInputVisible` | The rename input is visible |
+| `suggestWidgetVisible` | The suggest widget (auto-completion) is visible |
 | `textInputFocus` | A text input area has focus |
 | `terminalFocus` | A terminal has focus |
-| `suggestWidgetVisible` | The suggest widget (auto-completion) is visible |
+
+The `activeViewlet` context key corresponds to the id of the open sidebar pane:
+- `workbench.view.explorer` - File Explorer
+- `workbench.view.extensions` - Extensions
+- `workbench.view.scm` - SCM
+- `workbench.view.search` - Search
+
+The `editorLangId` context key corresponds to the language identifier of the active editor (the same value shown in the statusbar), and can be combined with other context keys, like:
+`'when': 'editorFocus && editorLangId == typescript'`
 
 Onivim-specific contexts:
 
@@ -131,6 +160,9 @@ Onivim-specific contexts:
 | `sneakMode` | Sneak mode is active |
 | `commandLineFocus` | The Vim commandline is open |
 | `listFocus` | A list of items (like a pop-up menu) is focused |
+| `sideBarFocus` | The sidebar has focus visible |
+| `sideBarVisible` | The sidebar is visible |
+| `paneFocus` | The bottom pane has focus |
 | `vimListNavigation` | Inside a Vim-navigable list |
 | `vimTreeNavigation` | Inside the file explorer |
 
@@ -143,6 +175,8 @@ Onivim-specific contexts:
 | Command+P / Control+P | Quick Open (File Picker) | `workbench.action.quickOpen` | 
 | Control+Tab | Navigate to next editor in group | `workbench.action.quickOpenNavigateNextInEditorPicker` |
 | Shift+Control+Tab | Navigate to previous editor in group | `workbench.action.quickOpenNavigatePreviousInEditorPicker` | 
+| Command+PageDown | Navigate to next tab | `workbench.action.nextEditor` |
+| Command+PageUp | Navigate to previous tab | `workbench.action.previousEditor` |
 | Command+= / Control+= | Zoom In | `workbench.action.zoomIn` | 
 | Command+- / Control+- | Zoom Out | `workbench.action.zoomOut` | 
 | Command+0 / Control+0 | Zoom Reset | `workbench.action.zoomReset` | 
@@ -154,12 +188,33 @@ Onivim-specific contexts:
 | Control+V / Command+V | Paste from clipboard | `editor.action.clipboardPasteAction` |
 | Control+S / Command+S | Save file | `workbench.action.files.save`
 
+### Language Features
+
+| Default Key Binding | Description | Command |
+| --- | --- | --- |
+| F2 | Rename | `editor.action.rename` |
+| F12 or `gd` | Go-to Definition | `editor.action.revealDefinition` |
+| Shift+F12 | Go-to References | `editor.action.goToReferences` |
+
 ### List / Menu commands
+
+> NOTE: Some of the list select commands may not be fully hooked up yet, such that they may not respect vertical/horizontal opening.
 
 | Default Key Binding | Description | Command |
 | --- | --- | --- |
 | Up Arrow / Control+P | Move focus up | `list.focusUp` |
 | Down Arrow / Control+N | Move focus down | `list.focusDown` |
+| Enter | Select current item | `list.select` |
+| Shift-Enter | Select current item (vertical open) | `oni.list.selectVertical` |
+| Ctrl-x | Select current item (horizontal open) | `oni.list.selectHorizontal` |
+| Ctrl-t | Select current item (new tab) | `oni.list.selectNewTab` |
+
+### Search Pane
+
+| Default Key Binding | Description | Command |
+| --- | --- | --- |
+| F4 | Focus next search result | `search.action.focusNextSearchResult` |
+| Shift+F4 | Focus previous search result | `search.action.focusPreviousSearchResult` |
 
 ### Sidebar
 

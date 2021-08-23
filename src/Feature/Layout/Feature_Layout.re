@@ -128,7 +128,7 @@ let update = (~focus, model, msg) => {
         updateGroup(groupId, Group.select(editorId)),
         model,
       ),
-      Nothing,
+      Focus(Center),
     )
   | EditorTabDoubleClicked({groupId, editorId}) => (
       updateActiveLayout(
@@ -155,7 +155,7 @@ let update = (~focus, model, msg) => {
 
   | LayoutTabClicked(index) => (
       {...model, activeLayoutIndex: index},
-      Nothing,
+      Focus(Center),
     )
 
   | LayoutCloseButtonClicked(index) =>
@@ -170,17 +170,36 @@ let update = (~focus, model, msg) => {
 
   | Command(SplitVertical) =>
     let editor = Feature_Editor.Editor.copy(activeEditor(model));
-    (split(~editor, `Vertical, model), SplitAdded);
+    (split(~shouldReuse=false, ~editor, `Vertical, model), SplitAdded);
 
   | Command(SplitHorizontal) =>
     let editor = Feature_Editor.Editor.copy(activeEditor(model));
-    (split(~editor, `Horizontal, model), SplitAdded);
+    (split(~shouldReuse=false, ~editor, `Horizontal, model), SplitAdded);
 
   | Command(CloseActiveEditor) =>
     switch (removeActiveEditor(model)) {
     | Some(model) => (model, Nothing)
     | None => (model, RemoveLastWasBlocked)
     }
+
+  | Command(CloseActiveGroup) =>
+    let model' = tryCloseActiveGroup(model);
+    switch (model') {
+    | Some(model) => (model, Nothing)
+    | None => (model, RemoveLastWasBlocked)
+    };
+
+  | Command(CloseActiveGroupUnlessLast) =>
+    let currentGroups = model |> activeLayout |> groups;
+    if (List.length(currentGroups) <= 1) {
+      (model, Nothing);
+    } else {
+      let model' = tryCloseActiveGroup(model);
+      switch (model') {
+      | Some(model) => (model, Nothing)
+      | None => (model, RemoveLastWasBlocked)
+      };
+    };
 
   | Command(MoveLeft) =>
     switch (focus) {
@@ -307,6 +326,69 @@ let update = (~focus, model, msg) => {
     | Some(Bottom)
     | None => (model, Nothing)
     }
+
+  | Command(MoveTopLeft) =>
+    switch (focus) {
+    | Some(Center) =>
+      let layout = model |> activeLayout;
+      let newActiveGroupId = layout |> activeTree |> Layout.topLeft;
+      (
+        updateActiveLayout(
+          layout => {...layout, activeGroupId: newActiveGroupId},
+          model,
+        ),
+        Nothing,
+      );
+
+    | Some(Left)
+    | Some(Right)
+    | Some(Bottom)
+    | None => (model, Nothing)
+    }
+  | Command(MoveBottomRight) =>
+    switch (focus) {
+    | Some(Center) =>
+      let layout = model |> activeLayout;
+      let newActiveGroupId = layout |> activeTree |> Layout.bottomRight;
+      (
+        updateActiveLayout(
+          layout => {...layout, activeGroupId: newActiveGroupId},
+          model,
+        ),
+        Nothing,
+      );
+
+    | Some(Left)
+    | Some(Right)
+    | Some(Bottom)
+    | None => (model, Nothing)
+    }
+  | Command(CycleForward) =>
+    let layout = model |> activeLayout;
+    let newActiveGroupId =
+      layout
+      |> activeTree
+      |> Layout.cycle(~direction=`Forward, ~activeId=layout.activeGroupId);
+    (
+      updateActiveLayout(
+        layout => {...layout, activeGroupId: newActiveGroupId},
+        model,
+      ),
+      Nothing,
+    );
+  | Command(CycleBackward) =>
+    let layout = model |> activeLayout;
+    let newActiveGroupId =
+      layout
+      |> activeTree
+      |> Layout.cycle(~direction=`Backward, ~activeId=layout.activeGroupId);
+    (
+      updateActiveLayout(
+        layout => {...layout, activeGroupId: newActiveGroupId},
+        model,
+      ),
+      Nothing,
+    );
 
   | Command(RotateForward) =>
     switch (focus) {
@@ -489,7 +571,9 @@ let update = (~focus, model, msg) => {
 
   | Command(ResetSizes) => (resetWeights(model), Nothing)
 
-  | Command(AddLayout) => (addLayoutTab(model), Nothing)
+  | Command(AddLayout) =>
+    let editor = Feature_Editor.Editor.copy(activeEditor(model));
+    (addLayoutTab(~editor, model), Nothing);
 
   | Command(PreviousLayout) => (
       {
@@ -564,6 +648,21 @@ module Commands = {
       Command(CloseActiveEditor),
     );
 
+  let closeActiveSplit =
+    define(
+      ~category="View",
+      ~title="Close Split",
+      "view.closeSplit",
+      Command(CloseActiveGroup),
+    );
+
+  let closeActiveSplitUnlessLast =
+    define(
+      ~category="View",
+      "view.closeSplitUnlessLast",
+      Command(CloseActiveGroupUnlessLast),
+    );
+
   let rotateForward =
     define(
       ~category="View",
@@ -607,6 +706,26 @@ module Commands = {
       "window.moveDown",
       Command(MoveDown),
     );
+
+  let moveTopLeft =
+    define(
+      ~category="View",
+      ~title="Focus Top Left Window",
+      "window.moveTopLeft",
+      Command(MoveTopLeft),
+    );
+
+  let moveBottomRight =
+    define(
+      ~category="View",
+      ~title="Focus Bottom Right Window",
+      "window.moveBottomRight",
+      Command(MoveBottomRight),
+    );
+
+  let cycleForward = define("window.cycleForward", Command(CycleForward));
+
+  let cycleBackward = define("window.cycleBackward", Command(CycleBackward));
 
   let decreaseSize =
     define(
@@ -779,12 +898,18 @@ module Contributions = {
       splitVertical,
       splitHorizontal,
       closeActiveEditor,
+      closeActiveSplit,
+      closeActiveSplitUnlessLast,
       rotateForward,
       rotateBackward,
       moveLeft,
       moveRight,
       moveUp,
       moveDown,
+      moveTopLeft,
+      moveBottomRight,
+      cycleForward,
+      cycleBackward,
       increaseSize,
       decreaseSize,
       increaseHorizontalSize,

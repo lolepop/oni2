@@ -6,19 +6,25 @@
    ConfigurationInvalidThemeTest ConfigurationPerFileTypeTest
    EditorFontFromPathTest EditorFontValidTest EditorSplitFileTest
    EditorUtf8Test ExCommandKeybindingTest ExCommandKeybindingWithArgsTest
-   ExCommandKeybindingNormTest ExtConfigurationChangedTest
-   ExtHostBufferOpenTest ExtHostBufferUpdatesTest ExtHostCompletionTest
-   ExtHostDefinitionTest FileWatcherTest KeybindingsInvalidJsonTest
-   KeySequenceJJTest InputIgnoreTest InputContextKeysTest
-   InputRemapMotionTest LanguageCssTest LanguageTypeScriptTest
-   LineEndingsLFTest LineEndingsCRLFTest QuickOpenEventuallyCompletesTest
-   SearchShowClearHighlightsTest SyntaxServer SyntaxServerCloseTest
-   SyntaxServerMessageExceptionTest SyntaxServerParentPidTest
-   SyntaxServerParentPidCorrectTest SyntaxServerReadExceptionTest
-   Regression1671Test Regression2349EnewTest Regression2988SwitchEditorTest
-   Regression3084CommandLoopTest RegressionCommandLineNoCompletionTest
+   ExCommandKeybindingNormTest ExtConfigurationChangedTest ExtHostContextTest
+   ExtHostBufferOpenTest ExtHostBufferUpdatesTest
+   ExtHostCommandActivationTest ExtHostCompletionTest ExtHostDefinitionTest
+   ExtHostFileSystemTest
+   ExtHostFormatSingleEditTest ExtHostFormatFullEditTest
+   ExtHostWorkspaceSearchTest FileWatcherTest FormatOnSaveTest
+   KeybindingsInvalidJsonTest KeySequenceJJTest InputIgnoreTest
+   InputContextKeysTest InputRemapMotionTest LanguageCssTest
+   LanguageTypeScriptTest LineEndingsLFTest LineEndingsCRLFTest
+   QuickOpenEventuallyCompletesTest SearchShowClearHighlightsTest
+   SyntaxServer SyntaxServerCloseTest SyntaxServerMessageExceptionTest
+   SyntaxServerParentPidTest SyntaxServerParentPidCorrectTest
+   SyntaxServerReadExceptionTest Regression1671Test Regression2349EnewTest
+   Regression2988SwitchEditorTest Regression3084CommandLoopTest
+   Regression3323DiagnosticsTest RegressionCommandLineNoCompletionTest
    RegressionFontFallbackTest RegressionFileModifiedIndicationTest
-   RegressionNonExistentDirectory RegressionVspEmptyInitialBufferTest
+   RegressionNonExistentDirectory 
+   RegressionLayoutTabSingleEditor
+   RegressionVspEmptyInitialBufferTest
    RegressionVspEmptyExistingBufferTest SCMGitTest SyntaxHighlightPhpTest
    SyntaxHighlightTextMateTest SyntaxHighlightTreesitterTest
    AddRemoveSplitTest TerminalSetPidTitleTest TerminalConfigurationTest
@@ -42,8 +48,10 @@
    EditorUtf8Test.exe ExCommandKeybindingTest.exe
    ExCommandKeybindingNormTest.exe ExCommandKeybindingWithArgsTest.exe
    ExtConfigurationChangedTest.exe ExtHostBufferOpenTest.exe
-   ExtHostBufferUpdatesTest.exe ExtHostCompletionTest.exe
-   ExtHostDefinitionTest.exe FileWatcherTest.exe
+   ExtHostBufferUpdatesTest.exe ExtHostCommandActivationTest.exe
+   ExtHostContextTest.exe ExtHostCompletionTest.exe ExtHostDefinitionTest.exe
+   ExtHostFileSystemTest.exe
+   ExtHostWorkspaceSearchTest.exe FileWatcherTest.exe FormatOnSaveTest.exe
    KeybindingsInvalidJsonTest.exe KeySequenceJJTest.exe InputIgnoreTest.exe
    InputContextKeysTest.exe InputRemapMotionTest.exe LanguageCssTest.exe
    LanguageTypeScriptTest.exe LineEndingsCRLFTest.exe LineEndingsLFTest.exe
@@ -52,6 +60,7 @@
    Regression3084CommandLoopTest.exe
    RegressionCommandLineNoCompletionTest.exe
    RegressionFileModifiedIndicationTest.exe RegressionFontFallbackTest.exe
+   RegressionLayoutTabSingleEditor.exe
    RegressionVspEmptyInitialBufferTest.exe RegressionNonExistentDirectory.exe
    RegressionVspEmptyExistingBufferTest.exe SCMGitTest.exe
    SearchShowClearHighlightsTest.exe SyntaxHighlightTextMateTest.exe
@@ -63,8 +72,10 @@
    AddRemoveSplitTest.exe TypingBatchedTest.exe TypingUnbatchedTest.exe
    VimExperimentalVimlTest.exe VimIncsearchScrollTest.exe
    VimScriptLocalFunctionTest.exe VimRemapTimeoutTest.exe
-   VimSimpleRemapTest.exe VimlRemapCmdlineTest.exe
-   ZenModeSingleFileModeTest.exe ZenModeSplitTest.exe ClipboardChangeTest.exe
-   large-c-file.c lsan.supp some-test-file.json some-test-file.txt test.crlf
-   test.lf test-syntax.php utf8.txt utf8-test-file.htm
-   Inconsolata-Regular.ttf PlugScriptLocal.vim))
+   Regression3323DiagnosticsTest.exe VimSimpleRemapTest.exe
+   VimlRemapCmdlineTest.exe ZenModeSingleFileModeTest.exe
+   ZenModeSplitTest.exe ClipboardChangeTest.exe
+   ExtHostFormatSingleEditTest.exe ExtHostFormatFullEditTest.exe
+   unformatted1.oni-dev test.unformatted.js large-c-file.c lsan.supp
+   some-test-file.json some-test-file.txt test.crlf test.lf test-syntax.php
+   utf8.txt utf8-test-file.htm Inconsolata-Regular.ttf PlugScriptLocal.vim))

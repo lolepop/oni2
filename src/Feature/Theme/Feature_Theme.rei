@@ -16,10 +16,16 @@ type command;
 [@deriving show]
 type msg;
 
-module Msg: {let openThemePicker: msg;};
+module Msg: {
+  let openThemePicker: msg;
+  let menuPreviewTheme: (~themeId: string) => msg;
+  let menuCommitTheme: (~themeId: string) => msg;
+  let vimColorSchemeSelected: (~themeId: string) => msg;
+};
 
 type outmsg =
   | Nothing
+  | ConfigurationTransform(ConfigurationTransformer.t)
   | OpenThemePicker(list(theme))
   | ThemeChanged(ColorTheme.Colors.t)
   | NotifyError(string);
@@ -31,11 +37,7 @@ let setTheme: (~themeId: string, model) => model;
 let configurationChanged: (~resolver: Config.resolver, model) => model;
 
 let colors:
-  (
-    ~extensionDefaults: list(ColorTheme.Defaults.t)=?,
-    ~customizations: ColorTheme.Colors.t=?,
-    model
-  ) =>
+  (~extensionDefaults: list(ColorTheme.Defaults.t)=?, model) =>
   ColorTheme.Colors.t;
 
 let tokenColors: model => Oni_Syntax.TokenTheme.t;

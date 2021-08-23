@@ -5,7 +5,14 @@ open Oni_Model;
 module Log = (val Log.withNamespace("Oni2.Extension.ClientStore"));
 
 let create =
-    (~initialWorkspace, ~attachStdio, ~config, ~extensions, ~setup: Setup.t) => {
+    (
+      ~initialWorkspace,
+      ~attachStdio,
+      ~config,
+      ~extensions,
+      ~setup: Setup.t,
+      ~proxy: Service_Net.Proxy.t,
+    ) => {
   let (stream, dispatch) = Isolinear.Stream.create();
 
   Log.infof(m =>
@@ -26,13 +33,25 @@ let create =
       | Initialized =>
         dispatch(Actions.Exthost(Feature_Exthost.Msg.initialized));
         Lwt.return(Reply.okEmpty);
-      | DownloadService(msg) => Middleware.download(msg)
+      | DownloadService(Download({uri, dest})) =>
+        let uri = uri |> Oni_Core.Uri.toString;
+        let dest = dest |> Oni_Core.Uri.toFileSystemPath;
 
-      | FileSystem(msg) =>
+        Service_Net.Request.download(
+          ~proxy,
+          ~dest,
+          ~setup=Oni_Core.Setup.init(),
+          uri,
+        )
+        |> Lwt.map(_ => Reply.okEmpty);
+
+      | FileSystem(fileMsg) =>
         let (promise, resolver) = Lwt.task();
 
-        let fileSystemMsg = Feature_FileSystem.Msg.exthost(~resolver, msg);
+        let fileSystemMsg =
+          Feature_FileSystem.Msg.exthost(~resolver, fileMsg);
         dispatch(FileSystem(fileSystemMsg));
+
         promise;
 
       | SCM(msg) =>
@@ -129,29 +148,11 @@ let create =
            )
 
       | QuickOpen(msg) =>
-        switch (msg) {
-        | QuickOpen.Show({instance, _}) =>
-          let (promise, resolver) = Lwt.task();
-          dispatch(
-            QuickmenuShow(
-              Extension({id: instance, hasItems: false, resolver}),
-            ),
-          );
-
-          promise |> Lwt.map(handle => Reply.okJson(`Int(handle)));
-        | QuickOpen.SetItems({instance, items}) =>
-          dispatch(QuickmenuUpdateExtensionItems({id: instance, items}));
-          Lwt.return(Reply.okEmpty);
-        | msg =>
-          // TODO: Additional quick open messages
-          Log.warnf(m =>
-            m(
-              "Unhandled QuickOpen message: %s",
-              Exthost.Msg.QuickOpen.show_msg(msg),
-            )
-          );
-          Lwt.return(Reply.okEmpty);
-        }
+        let (promise, resolver) = Lwt.task();
+        dispatch(
+          Actions.QuickOpen(Feature_QuickOpen.Msg.exthost(~resolver, msg)),
+        );
+        promise;
 
       | StatusBar(
           SetEntry({
@@ -198,14 +199,36 @@ let create =
       | TerminalService(msg) =>
         Service_Terminal.handleExtensionMessage(msg);
         Lwt.return(Reply.okEmpty);
+
+      | TextEditors(textEditorMsg) =>
+        let (promise, resolver) = Lwt.task();
+        dispatch(
+          Actions.Exthost(
+            Feature_Exthost.Msg.textEditors(textEditorMsg, resolver),
+          ),
+        );
+        promise;
+
       | Window(OpenUri({uri})) =>
         Service_OS.Api.openURL(uri |> Oni_Core.Uri.toString)
           ? Lwt.return(Reply.okEmpty)
           : Lwt.return(Reply.error("Unable to open URI"))
       | Window(GetWindowVisibility) =>
         Lwt.return(Reply.okJson(`Bool(true)))
-      | Workspace(StartFileSearch({includePattern, excludePattern, _})) =>
+
+      | Workspace(SaveAll({includeUntitled})) =>
+        ignore(includeUntitled);
+
+        dispatch(
+          Actions.VimExecuteCommand({command: "wa!", allowAnimation: false}),
+        );
+        Lwt.return(Reply.okEmpty);
+
+      | Workspace(
+          StartFileSearch({includePattern, excludePattern, maxResults}),
+        ) =>
         Service_OS.Api.glob(
+          ~maxCount=?maxResults,
           ~includeFiles=?includePattern,
           ~excludeDirectories=?excludePattern,
           // TODO: Pull from store
@@ -236,8 +259,8 @@ let create =
 
   let tempDir = Filename.get_temp_dir_name();
 
-  let logFile = tempDir |> Uri.fromPath;
-  let logsLocation =
+  let logsLocation = tempDir |> Uri.fromPath;
+  let logFile =
     Filename.temp_file(~temp_dir=tempDir, "onivim2", "exthost.log")
     |> Uri.fromPath;
 

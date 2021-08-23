@@ -17,10 +17,14 @@ module Editor = Feature_Editor.Editor;
 
 module Log = (val Core.Log.withNamespace("Oni2.Store.Vim"));
 
+let vimFileWatcherKey =
+  Service_FileWatcher.Key.create(
+    ~friendlyName="VimStoreConnector.FileWatcher",
+  );
+
 let start =
     (
       ~showUpdateChangelog: bool,
-      languageInfo: Exthost.LanguageInfo.t,
       getState: unit => State.t,
       getClipboardText,
       setClipboardText,
@@ -31,10 +35,8 @@ let start =
 
   Vim.Clipboard.setProvider(reg => {
     let state = getState();
-    let yankConfig =
-      Selectors.getActiveConfigurationValue(state, c =>
-        c.vimUseSystemClipboard
-      );
+
+    let yankConfig = Feature_Vim.useSystemClipboard(state.vim);
 
     let starReg = Char.code('*');
     let plusReg = Char.code('+');
@@ -61,7 +63,12 @@ let start =
 
   let _: unit => unit =
     Vim.onVersion(() => {
-      Actions.OpenFileByPath("oni://Version", None, None) |> dispatch
+      Actions.OpenFileByPath(
+        "oni://Version",
+        Core.SplitDirection.Current,
+        None,
+      )
+      |> dispatch
     });
 
   let _: unit => unit =
@@ -96,19 +103,30 @@ let start =
 
     let actionForFilePath = (filePath, direction) => {
       switch (filePath) {
-      | Some(fp) => Actions.OpenFileByPath(fp, Some(direction), None)
+      | Some(fp) => Actions.OpenFileByPath(fp, direction, None)
       // No file path specified, so let's use the current buffer
       | None => Actions.OpenBufferById({bufferId: currentBufferId, direction})
       };
     };
     Vim.Split.(
       switch (split) {
-      | NewHorizontal => Actions.NewBuffer({direction: `Horizontal})
-      | NewVertical => Actions.NewBuffer({direction: `Vertical})
-      | NewTabPage => Actions.NewBuffer({direction: `NewTab})
-      | Vertical({filePath}) => actionForFilePath(filePath, `Vertical)
-      | Horizontal({filePath}) => actionForFilePath(filePath, `Horizontal)
-      | TabPage({filePath}) => actionForFilePath(filePath, `NewTab)
+      | NewHorizontal =>
+        Actions.NewBuffer({direction: Core.SplitDirection.Horizontal})
+      | NewVertical =>
+        Actions.NewBuffer({
+          direction: Core.SplitDirection.Vertical({shouldReuse: false}),
+        })
+      | NewTabPage =>
+        Actions.NewBuffer({direction: Core.SplitDirection.NewTab})
+      | Vertical({filePath}) =>
+        actionForFilePath(
+          filePath,
+          Core.SplitDirection.Vertical({shouldReuse: false}),
+        )
+      | Horizontal({filePath}) =>
+        actionForFilePath(filePath, Core.SplitDirection.Horizontal)
+      | TabPage({filePath}) =>
+        actionForFilePath(filePath, Core.SplitDirection.NewTab)
       }
     );
   };
@@ -124,7 +142,11 @@ let start =
       dispatch(Actions.SideBar(Feature_SideBar.(Command(GotoOutline))))
 
     | Vim.Goto.Messages =>
-      dispatch(Actions.Pane(Feature_Pane.Msg.toggleMessages))
+      dispatch(
+        Actions.Pane(
+          Feature_Pane.Msg.toggle(~paneId="workbench.panel.notifications"),
+        ),
+      )
 
     | Vim.Goto.Definition
     | Vim.Goto.Declaration =>
@@ -151,7 +173,7 @@ let start =
 
              Actions.OpenFileByPath(
                definitionResult.uri |> Core.Uri.toFileSystemPath,
-               None,
+               Core.SplitDirection.Current,
                Some(position),
              );
            });
@@ -172,9 +194,10 @@ let start =
       | SearchStringChanged(_) => ()
       | SearchClearHighlights => ()
 
-      // TODO: Move internal to Feature_Vim
-      | Output({cmd, output}) => {
-          dispatch(Actions.Vim(Feature_Vim.Output({cmd, output})));
+      | Output({cmd, output, isSilent}) => {
+          dispatch(
+            Actions.Vim(Feature_Vim.Msg.output(~cmd, ~output, ~isSilent)),
+          );
         }
 
       | Clear({target, count}) =>
@@ -210,24 +233,24 @@ let start =
             ),
           ),
         )
-      | SettingChanged(setting) =>
-        dispatch(Actions.Vim(Feature_Vim.SettingChanged(setting)))
+      | SettingChanged(setting) => {
+          dispatch(Actions.Vim(Feature_Vim.Msg.settingChanged(~setting)));
+        }
 
       | ColorSchemeChanged(maybeColorScheme) =>
         switch (maybeColorScheme) {
         | None => dispatch(Actions.Theme(Feature_Theme.Msg.openThemePicker))
-        | Some(colorScheme) => dispatch(Actions.ThemeSelected(colorScheme))
+        | Some(colorScheme) =>
+          dispatch(
+            Actions.Theme(
+              Feature_Theme.Msg.vimColorSchemeSelected(~themeId=colorScheme),
+            ),
+          )
         }
 
-      | MacroRecordingStarted({register}) =>
-        dispatch(
-          Actions.Vim(
-            Feature_Vim.MacroRecordingStarted({register: register}),
-          ),
-        )
+      | MacroRecordingStarted(_) => ()
 
-      | MacroRecordingStopped(_) =>
-        dispatch(Actions.Vim(Feature_Vim.MacroRecordingStopped))
+      | MacroRecordingStopped(_) => ()
 
       | WindowSplit(split) => handleSplit(split) |> dispatch,
     );
@@ -288,10 +311,7 @@ let start =
         dispatch(Actions.Yank({range: visualRange}));
       };
 
-      let yankConfig =
-        Selectors.getActiveConfigurationValue(state, c =>
-          c.vimUseSystemClipboard
-        );
+      let yankConfig = Feature_Vim.useSystemClipboard(state.vim);
       let allYanks = yankConfig.yank;
       let allDeletes = yankConfig.delete;
       let isClipboardRegister = register == '*' || register == '+';
@@ -319,27 +339,10 @@ let start =
   let _: unit => unit =
     Vim.Buffer.onFilenameChanged(meta => {
       Log.debugf(m => m("Buffer metadata changed: %n", meta.id));
-      // TODO: This isn't buffer aware, so it won't be able to deal with the
-      // firstline way of getting syntax, which means if that is in use,
-      // it will get wiped when renaming the file.
-      //
-      // Other notes: The file path is going to be updated in BufferFilenameChanged,
-      // so you can't use the buffer here, as it will have the old path.
-      // Additionally, the syntax server will need to be notified on the filetype
-      // change / hook it up to onFileTypeChanged.
-      let fileType =
-        switch (meta.filePath) {
-        | Some(v) =>
-          Exthost.LanguageInfo.getLanguageFromFilePath(languageInfo, v)
-          |> Oni_Core.Buffer.FileType.inferred
-        | None => Oni_Core.Buffer.FileType.none
-        };
-
       dispatch(
         Actions.Buffers(
           Feature_Buffers.Msg.fileNameChanged(
             ~bufferId=meta.id,
-            ~newFileType=fileType,
             ~newFilePath=meta.filePath,
             ~isModified=meta.modified,
             ~version=meta.version,
@@ -374,14 +377,16 @@ let start =
   let _: unit => unit =
     Vim.onTerminal(({cmd, curwin, closeOnFinish, _}) => {
       let splitDirection =
-        if (curwin) {Feature_Terminal.Current} else {
-          Feature_Terminal.Horizontal
+        if (curwin) {Oni_Core.SplitDirection.Current} else {
+          Oni_Core.SplitDirection.Horizontal
         };
 
       dispatch(
         Actions.Terminal(
-          Command(
-            NewTerminal({cmd, splitDirection, closeOnExit: closeOnFinish}),
+          Feature_Terminal.Msg.terminalCreatedFromVim(
+            ~cmd,
+            ~splitDirection,
+            ~closeOnExit=closeOnFinish,
           ),
         ),
       );
@@ -417,6 +422,7 @@ let start =
           ~endLine=EditorCoreTypes.LineNumber.ofOneBased(endLine),
           ~lines=update.lines,
           ~version=update.version,
+          ~shouldAdjustCursorPosition=update.shouldAdjustCursorPosition,
           (),
         );
 
@@ -433,6 +439,8 @@ let start =
         != Some(false);
 
       if (shouldApply) {
+        let languageInfo =
+          getState().languageSupport |> Feature_LanguageSupport.languageInfo;
         maybeBuffer
         |> Option.iter(oldBuffer => {
              let newBuffer = Core.Buffer.update(oldBuffer, bu);
@@ -445,13 +453,13 @@ let start =
 
              let newBuffer =
                if (firstLineChanged) {
-                 let fileType =
-                   Oni_Core.Buffer.FileType.inferred(
-                     Exthost.LanguageInfo.getLanguageFromBuffer(
-                       languageInfo,
-                       newBuffer,
-                     ),
+                 let language =
+                   Exthost.LanguageInfo.getLanguageFromBuffer(
+                     languageInfo,
+                     newBuffer,
                    );
+                 let fileType = Oni_Core.Buffer.FileType.inferred(language);
+
                  newBuffer |> Core.Buffer.setFileType(fileType);
                } else {
                  newBuffer;
@@ -504,9 +512,8 @@ let start =
               name,
               category: None,
               icon: None,
-              command: () => Noop,
+              command: _ => Noop,
               highlight: [],
-              handle: None,
             }
           },
           completions,
@@ -545,7 +552,11 @@ let start =
       if (showUpdateChangelog
           && Core.BuildInfo.commitId != Persistence.Global.version()) {
         dispatch(
-          Actions.OpenFileByPath(Core.BufferPath.updateChangelog, None, None),
+          Actions.OpenFileByPath(
+            Core.BufferPath.updateChangelog,
+            Core.SplitDirection.Current,
+            None,
+          ),
         );
       };
       libvimHasInitialized := true;
@@ -555,7 +566,12 @@ let start =
     dispatch(
       // TODO
       Actions.Vim(
-        Feature_Vim.ModeChanged({allowAnimation, subMode, mode, effects}),
+        Feature_Vim.Msg.modeChanged(
+          ~allowAnimation,
+          ~subMode,
+          ~mode,
+          ~effects,
+        ),
       ),
     );
   };
@@ -583,7 +599,7 @@ let start =
         dispatch(
           Actions.OpenBufferById({
             bufferId: newContext.bufferId,
-            direction: `Current,
+            direction: Core.SplitDirection.Current,
           }),
         );
       } else {
@@ -615,7 +631,12 @@ let start =
 
         // If we switched buffer, open it in current editor
         if (previousBufferId != bufferId) {
-          dispatch(Actions.OpenBufferById({bufferId, direction: `Current}));
+          dispatch(
+            Actions.OpenBufferById({
+              bufferId,
+              direction: Core.SplitDirection.Current,
+            }),
+          );
         };
 
         updateActiveEditorMode(subMode, mode, effects);
@@ -663,26 +684,14 @@ let start =
       }
     );
 
-  let copyActiveFilepathToClipboardEffect =
-    Isolinear.Effect.create(~name="vim.copyActiveFilepathToClipboard", () =>
-      switch (Vim.Buffer.getCurrent() |> Vim.Buffer.getFilename) {
-      | Some(filename) => setClipboardText(filename)
-      | None => ()
-      }
-    );
-
   let prevViml = ref([]);
   let synchronizeViml = lines =>
     Isolinear.Effect.create(~name="vim.synchronizeViml", () =>
       if (prevViml^ != lines) {
-        List.iter(
-          l => {
-            Log.info("Running VimL from config: " ++ l);
-            Vim.command(l) |> ignore;
-            Log.info("VimL command completed.");
-          },
-          lines,
-        );
+        let linesArray = Array.of_list(lines);
+        Log.info("Running VimL from config...");
+        Vim.commands(linesArray) |> ignore;
+        Log.info("VimL command completed.");
         prevViml := lines;
       }
     );
@@ -738,38 +747,6 @@ let start =
       ();
     });
 
-  let setTerminalLinesEffect = (~editorId, ~bufferId, lines: array(string)) => {
-    Isolinear.Effect.create(~name="vim.setTerminalLinesEffect", () => {
-      let () =
-        bufferId
-        |> Vim.Buffer.getById
-        |> Option.iter(buf => {
-             Vim.Buffer.setModifiable(~modifiable=true, buf);
-             Vim.Buffer.setLines(~lines, buf);
-             Vim.Buffer.setModifiable(~modifiable=false, buf);
-             Vim.Buffer.setReadOnly(~readOnly=true, buf);
-           });
-
-      // Clear out previous mode
-      let _: (Vim.Context.t, list(Vim.Effect.t)) = Vim.key("<esc>");
-      let _: (Vim.Context.t, list(Vim.Effect.t)) = Vim.key("<esc>");
-      // Jump to bottom
-      let _: (Vim.Context.t, list(Vim.Effect.t)) = Vim.input("g");
-      let _: (Vim.Context.t, list(Vim.Effect.t)) = Vim.input("g");
-      let _: (Vim.Context.t, list(Vim.Effect.t)) = Vim.input("G");
-      let ({mode, _}: Vim.Context.t, effects) = Vim.input("$");
-
-      // Update the editor, which is the source of truth for cursor position
-      let scope = EditorScope.Editor(editorId);
-      dispatch(
-        Actions.Editor({
-          scope,
-          msg: ModeChanged({allowAnimation: true, mode, effects}),
-        }),
-      );
-    });
-  };
-
   let updater = (state: State.t, action: Actions.t) => {
     switch (action) {
     | SynchronizeExperimentalViml(lines) => (state, synchronizeViml(lines))
@@ -807,91 +784,7 @@ let start =
       (state, eff);
 
     | Init => (state, initEffect)
-    | Terminal(Command(NormalMode)) =>
-      let maybeBufferId =
-        state
-        |> Selectors.getActiveBuffer
-        |> Option.map(Oni_Core.Buffer.getId);
-
-      let maybeTerminalId =
-        maybeBufferId
-        |> Option.map(id =>
-             BufferRenderers.getById(id, state.bufferRenderers)
-           )
-        |> OptionEx.flatMap(
-             fun
-             | BufferRenderer.Terminal({id, _}) => Some(id)
-             | _ => None,
-           );
-
-      let editorId =
-        Feature_Layout.activeEditor(state.layout) |> Editor.getId;
-
-      let (state, effect) =
-        OptionEx.map2(
-          (bufferId, terminalId) => {
-            let colorTheme = Feature_Theme.colors(state.colorTheme);
-            let (lines, highlights) =
-              Feature_Terminal.getLinesAndHighlights(
-                ~colorTheme,
-                ~terminalId,
-              );
-            let syntaxHighlights =
-              List.fold_left(
-                (acc, curr) => {
-                  let (line, tokens) = curr;
-                  Feature_Syntax.setTokensForLine(
-                    ~bufferId,
-                    ~line,
-                    ~tokens,
-                    acc,
-                  );
-                },
-                state.syntaxHighlights,
-                highlights,
-              );
-
-            let syntaxHighlights =
-              syntaxHighlights |> Feature_Syntax.ignore(~bufferId);
-
-            let layout =
-              Feature_Layout.map(
-                editor =>
-                  if (Editor.getBufferId(editor) == bufferId) {
-                    state.buffers
-                    |> Feature_Buffers.get(bufferId)
-                    |> Option.map(buffer => {
-                         let updatedBuffer =
-                           buffer
-                           |> Oni_Core.Buffer.setFont(state.terminalFont)
-                           |> Feature_Editor.EditorBuffer.ofBuffer;
-                         Editor.setBuffer(~buffer=updatedBuffer, editor);
-                       })
-                    |> Option.value(~default=editor);
-                  } else {
-                    editor;
-                  },
-                state.layout,
-              );
-
-            (
-              {...state, layout, syntaxHighlights},
-              setTerminalLinesEffect(~bufferId, ~editorId, lines),
-            );
-          },
-          maybeBufferId,
-          maybeTerminalId,
-        )
-        |> Option.value(~default=(state, Isolinear.Effect.none));
-
-      (state, effect);
-
     | KeyboardInput({isText, input}) => (state, inputEffect(~isText, input))
-
-    | CopyActiveFilepathToClipboard => (
-        state,
-        copyActiveFilepathToClipboardEffect,
-      )
 
     | VimMessageReceived({priority, message, _}) =>
       let kind =
@@ -916,7 +809,8 @@ let start =
       switch (Selectors.getActiveBuffer(state)) {
       | Some(buffer)
           when
-            Core.Buffer.getFilePath(buffer) == Some(event.path)
+            Core.Buffer.getFilePath(buffer)
+            == Some(Core.FpExp.toString(event.watchedPath))
             && !Core.Buffer.isModified(buffer) => (
           state,
           Service_Vim.reload(),
@@ -1027,8 +921,10 @@ let subscriptions = (state: State.t) => {
   |> List.filter_map(buffer =>
        buffer
        |> Core.Buffer.getFilePath
+       |> OptionEx.flatMap(Core.FpExp.absoluteCurrentPlatform)
        |> Option.map(path =>
-            Service_FileWatcher.watch(~path, ~onEvent=event =>
+            Service_FileWatcher.watch(
+              ~watchChanges=true, ~key=vimFileWatcherKey, ~path, ~onEvent=event =>
               Actions.FileChanged(event)
             )
           )

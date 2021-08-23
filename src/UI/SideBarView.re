@@ -65,6 +65,8 @@ let make = (~key=?, ~config, ~theme, ~state: State.t, ~dispatch, ()) => {
     | Search => "Search"
     };
 
+  let languageInfo =
+    state.languageSupport |> Feature_LanguageSupport.languageInfo;
   let maybeBuffer = Selectors.getActiveBuffer(state);
   let maybeSymbols =
     maybeBuffer
@@ -76,15 +78,20 @@ let make = (~key=?, ~config, ~theme, ~state: State.t, ~dispatch, ()) => {
          )
        );
 
+  let isOpen =
+    Feature_SideBar.isOpen(state.sideBar)
+    || Focus.isSidebarFocused(FocusManager.current(state));
   let width = Feature_SideBar.width(state.sideBar);
+
   let elem =
-    width > 25
+    width > 25 && isOpen
       ? switch (sideBar |> selected) {
         | FileExplorer =>
           let dispatch = msg => dispatch(Actions.FileExplorer(msg));
           <Feature_Explorer.View
+            config
             isFocused={FocusManager.current(state) == Focus.FileExplorer}
-            languageInfo={state.languageInfo}
+            languageInfo
             iconTheme={state.iconTheme}
             decorations={state.decorations}
             documentSymbols=maybeSymbols
@@ -102,7 +109,7 @@ let make = (~key=?, ~config, ~theme, ~state: State.t, ~dispatch, ()) => {
               state.workspace,
             )}
             isFocused={FocusManager.current(state) == Focus.SCM}
-            languageInfo={state.languageInfo}
+            languageInfo
             iconTheme={state.iconTheme}
             theme
             font
@@ -114,9 +121,10 @@ let make = (~key=?, ~config, ~theme, ~state: State.t, ~dispatch, ()) => {
             GlobalContext.current().dispatch(Actions.Search(msg));
 
           <Feature_Search
+            config
             isFocused={FocusManager.current(state) == Focus.Search}
             theme
-            languageInfo={state.languageInfo}
+            languageInfo
             iconTheme={state.iconTheme}
             uiFont={state.uiFont}
             model={state.searchPane}
@@ -130,6 +138,7 @@ let make = (~key=?, ~config, ~theme, ~state: State.t, ~dispatch, ()) => {
           let extensionDispatch = msg => dispatch(Actions.Extensions(msg));
           <Feature_Extensions.ListView
             model={state.extensions}
+            proxy={state.proxy |> Feature_Proxy.proxy}
             theme
             font
             isFocused={FocusManager.current(state) == Focus.Extensions}
@@ -138,9 +147,7 @@ let make = (~key=?, ~config, ~theme, ~state: State.t, ~dispatch, ()) => {
         }
       : React.empty;
 
-  let separator =
-    Feature_SideBar.isOpen(state.sideBar) && width > 4
-      ? <separator /> : React.empty;
+  let separator = isOpen && width > 4 ? <separator /> : React.empty;
 
   let focus = FocusManager.current(state);
   let isFocused =
@@ -149,8 +156,10 @@ let make = (~key=?, ~config, ~theme, ~state: State.t, ~dispatch, ()) => {
     || focus == Focus.Extensions
     || focus == Focus.Search;
 
+  let widthTakingIntoAccountOpen = isOpen ? width : 0;
+
   let content =
-    <View ?key style={Styles.contents(~width)}>
+    <View ?key style={Styles.contents(~width=widthTakingIntoAccountOpen)}>
       <View style={Styles.heading(theme)}>
         <View style=Styles.titleContainer>
           <Text

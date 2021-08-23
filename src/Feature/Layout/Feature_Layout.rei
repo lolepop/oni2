@@ -13,12 +13,27 @@ type panel =
 module Group: {
   type t;
 
+  type id;
+
+  let id: t => id;
+
   let allEditors: t => list(Editor.t);
+};
+
+module LayoutTab: {
+  type t;
+
+  let groups: t => list(Group.t);
 };
 
 type model;
 
+let activeGroup: model => Group.t;
 let activeLayoutGroups: model => list(Group.t);
+let setActiveGroup: (Group.id, model) => model;
+
+let layouts: model => list(LayoutTab.t);
+let activeLayout: model => LayoutTab.t;
 
 let initial: list(Editor.t) => model;
 
@@ -26,7 +41,14 @@ let visibleEditors: model => list(Editor.t);
 let editorById: (int, model) => option(Editor.t);
 let removeEditor: (int, model) => option(model);
 
-let split: (~editor: Editor.t, [ | `Horizontal | `Vertical], model) => model;
+let split:
+  (
+    ~shouldReuse: bool,
+    ~editor: Editor.t,
+    [ | `Horizontal | `Vertical],
+    model
+  ) =>
+  model;
 
 let activeEditor: model => Editor.t;
 let activeGroupEditors: model => list(Editor.t);
@@ -34,7 +56,7 @@ let activeGroupEditors: model => list(Editor.t);
 let openEditor: (~config: Config.resolver, Editor.t, model) => model;
 let closeBuffer: (~force: bool, Vim.Types.buffer, model) => option(model);
 
-let addLayoutTab: model => model;
+let addLayoutTab: (~editor: Editor.t, model) => model;
 let gotoLayoutTab: (int, model) => model;
 let previousLayoutTab: (~count: int=?, model) => model;
 let nextLayoutTab: (~count: int=?, model) => model;
@@ -113,11 +135,17 @@ module Commands: {
   let splitHorizontal: Command.t(msg);
 
   let closeActiveEditor: Command.t(msg);
+  let closeActiveSplit: Command.t(msg);
+  let closeActiveSplitUnlessLast: Command.t(msg);
 
   let moveLeft: Command.t(msg);
   let moveRight: Command.t(msg);
   let moveUp: Command.t(msg);
   let moveDown: Command.t(msg);
+  let moveTopLeft: Command.t(msg);
+  let moveBottomRight: Command.t(msg);
+  let cycleForward: Command.t(msg);
+  let cycleBackward: Command.t(msg);
 
   let rotateForward: Command.t(msg);
   let rotateBackward: Command.t(msg);

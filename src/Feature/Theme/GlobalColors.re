@@ -187,6 +187,19 @@ module Editor = {
       "editor.findMatchHighlightBackground",
       {light: hex("#EA5C0055"), dark: hex("#EA5C0055"), hc: unspecified},
     );
+
+  let lightBulbForeground =
+    define(
+      "editorLightBulb.foreground",
+      {light: hex("#DDB100"), dark: hex("#FFCC00"), hc: hex("#FFCC00")},
+    );
+
+  let lightBulbAutoFixForeground =
+    define(
+      "editorLightBulbAutoFix.foreground",
+      {light: hex("#007ACC"), dark: hex("#75BEFF"), hc: hex("#75BEFF")},
+    );
+
   let lineHighlightBackground =
     define("editor.lineHighlightBackground", all(unspecified));
   let selectionBackground =
@@ -206,6 +219,8 @@ module Editor = {
     findMatchBackground,
     findMatchBorder,
     findMatchHighlightsBackground,
+    lightBulbForeground,
+    lightBulbAutoFixForeground,
     lineHighlightBackground,
     selectionBackground,
     wordHighlightBackground,
@@ -225,6 +240,26 @@ module EditorError = {
     );
 
   let defaults = [foreground, border];
+};
+
+module EditorUnnecessaryCode = {
+  let border =
+    define(
+      "editorUnnecessaryCode.border",
+      {
+        dark: unspecified,
+        light: unspecified,
+        hc: hex("#fff") |> transparent(0.8),
+      },
+    );
+
+  let opacity =
+    define(
+      "editorUnnecessaryCode.opacity",
+      {dark: hex("#0007"), light: hex("#000a"), hc: unspecified},
+    );
+
+  let defaults = [border, opacity];
 };
 
 module EditorWarning = {
@@ -292,6 +327,20 @@ module EditorCursor = {
   let defaults = [background, foreground];
 };
 
+module EditorGroup = {
+  let border =
+    define(
+      "editorGroup.border",
+      {
+        dark: hex("#444444"),
+        light: hex("#E7E7E7"),
+        hc: ref(contrastBorder),
+      },
+    );
+
+  let defaults = [border];
+};
+
 module EditorGroupHeader = {
   let tabsBackground =
     define(
@@ -299,7 +348,9 @@ module EditorGroupHeader = {
       {dark: hex("#252526"), light: hex("#F3F3F3"), hc: unspecified},
     );
 
-  let defaults = [tabsBackground];
+  let border = define("editorGroupHeader.border", all(ref(tabsBackground)));
+
+  let defaults = [tabsBackground, border];
 };
 
 module EditorGutter = {
@@ -507,6 +558,12 @@ module List = {
 
   let focusForeground =
     define("list.focusForeground", all(ref(foreground))); // actually: unspecified
+
+  let focusOutline = define("list.focusOutline", all(ref(focusBorder)));
+
+  let inactiveFocusOutline =
+    define("list.inactiveFocusOutline", all(ref(inactiveFocusBackground)));
+
   let activeSelectionBackground =
     define(
       "list.activeSelectionBackground",
@@ -565,6 +622,7 @@ module List = {
   let defaults = [
     focusBackground,
     focusForeground,
+    focusOutline,
     activeSelectionBackground,
     activeSelectionForeground,
     hoverBackground,
@@ -573,6 +631,7 @@ module List = {
     deemphasizedForeground,
     activeIndentGuide,
     inactiveIndentGuide,
+    inactiveFocusOutline,
     filterMatchBackground,
     filterMatchBorder,
   ];
@@ -585,9 +644,9 @@ module EditorSuggestWidget = {
       all(ref(EditorWidget.background)),
     );
   let border =
-    define("editorSuggestWidget,border", all(ref(EditorWidget.border)));
+    define("editorSuggestWidget.border", all(ref(EditorWidget.border)));
   let foreground =
-    define("editorSuggestWidget.background", all(ref(Editor.foreground)));
+    define("editorSuggestWidget.foreground", all(ref(Editor.foreground)));
   let highlightForeground =
     define(
       "editorSuggestWidget.highlightForeground",
@@ -602,6 +661,7 @@ module EditorSuggestWidget = {
   let defaults = [
     background,
     border,
+    foreground,
     highlightForeground,
     selectedBackground,
   ];

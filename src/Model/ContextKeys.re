@@ -41,19 +41,22 @@ let menus = (~isFocused, ~isNewQuickMenuOpen) => {
   );
 };
 
+let isEditorFocused = state => {
+  switch (ModeManager.current(state)) {
+  | TerminalInsert
+  | TerminalNormal
+  | TerminalVisual(_) => false
+  | _ => true
+  };
+};
+
 let editors = (~isFocused) => {
   Schema.(
     fromList(
       isFocused
         ? [
-          bool("editorTextFocus", state =>
-            switch (ModeManager.current(state)) {
-            | TerminalInsert
-            | TerminalNormal
-            | TerminalVisual(_) => false
-            | _ => true
-            }
-          ),
+          bool("editorFocus", isEditorFocused),
+          bool("editorTextFocus", isEditorFocused),
           bool("terminalFocus", state =>
             switch (ModeManager.current(state)) {
             | TerminalInsert
@@ -132,6 +135,11 @@ let all = (state: State.t) => {
     |> Schema.map(({sideBar, _}: State.t) => sideBar)
     |> fromSchema(state);
 
+  let editorContextKeys =
+    state.layout
+    |> Feature_Layout.activeEditor
+    |> Feature_Editor.Editor.contextKeys;
+
   // TODO: These sidebar-specific UI pieces should be encapsulated
   // by Feature_SideBar.contextKeys.
   let scmContextKeys =
@@ -161,6 +169,7 @@ let all = (state: State.t) => {
   let paneContextKeys =
     Feature_Pane.Contributions.contextKeys(
       ~isFocused=focus == Focus.Pane,
+      state,
       state.pane,
     );
 
@@ -186,6 +195,7 @@ let all = (state: State.t) => {
     explorerContextKeys,
     sideBarContext,
     scmContextKeys,
+    editorContextKeys,
     extensionContextKeys,
     searchContextKeys,
     paneContextKeys,
@@ -193,9 +203,7 @@ let all = (state: State.t) => {
       ~isFocused=focus == Focus.LicenseKey,
       state.registration,
     ),
-    Feature_LanguageSupport.Contributions.contextKeys
-    |> Schema.map(({languageSupport, _}: State.t) => languageSupport)
-    |> fromSchema(state),
+    Feature_LanguageSupport.Contributions.contextKeys(state.languageSupport),
     menus(
       ~isFocused=focus == Focus.Quickmenu || focus == Focus.Wildmenu,
       ~isNewQuickMenuOpen=focus == Focus.NewQuickmenu,

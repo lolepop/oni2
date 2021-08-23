@@ -42,7 +42,6 @@ module Msg: {
     (
       ~bufferId: int,
       ~newFilePath: option(string),
-      ~newFileType: Oni_Core.Buffer.FileType.t,
       ~version: int,
       ~isModified: bool
     ) =>
@@ -62,36 +61,54 @@ module Msg: {
     msg;
 
   let selectFileTypeClicked: (~bufferId: int) => msg;
+  let statusBarIndentationClicked: msg;
+
+  let copyActivePathToClipboard: msg;
 };
 
 type outmsg =
   | Nothing
+  | BufferIndentationChanged({buffer: Oni_Core.Buffer.t})
   | BufferUpdated({
       update: Oni_Core.BufferUpdate.t,
       markerUpdate: Oni_Core.MarkerUpdate.t,
+      minimalUpdate: Oni_Core.MinimalUpdate.t,
       newBuffer: Oni_Core.Buffer.t,
       oldBuffer: Oni_Core.Buffer.t,
       triggerKey: option(string),
     })
-  | BufferSaved(Oni_Core.Buffer.t)
+  | BufferSaved({
+      buffer: Oni_Core.Buffer.t,
+      reason: SaveReason.t,
+    })
   | CreateEditor({
       buffer: Oni_Core.Buffer.t,
-      split: [ | `Current | `Horizontal | `Vertical | `NewTab],
+      split: SplitDirection.t,
       position: option(BytePosition.t),
       grabFocus: bool,
       preview: bool,
     })
   | BufferModifiedSet(int, bool)
+  | SetClipboardText(string)
   | ShowMenu(
       (Exthost.LanguageInfo.t, IconTheme.t) =>
       Feature_Quickmenu.Schema.menu(msg),
     )
-  | NotifyInfo(string);
+  | NotifyInfo(string)
+  | NotifyError(string)
+  | Effect(Isolinear.Effect.t(msg));
 
 // UPDATE
 
 let update:
-  (~activeBufferId: int, ~config: Config.fileTypeResolver, msg, model) =>
+  (
+    ~activeBufferId: int,
+    ~config: Config.fileTypeResolver,
+    ~languageInfo: Exthost.LanguageInfo.t,
+    ~workspace: Feature_Workspace.model,
+    msg,
+    model
+  ) =>
   (model, outmsg);
 
 let configurationChanged: (~config: Config.resolver, model) => model;
@@ -113,7 +130,7 @@ module Effects: {
     (
       ~font: Service_Font.font,
       ~languageInfo: Exthost.LanguageInfo.t,
-      ~split: [ | `Current | `Horizontal | `Vertical | `NewTab],
+      ~split: SplitDirection.t,
       model
     ) =>
     Isolinear.Effect.t(msg);
@@ -122,7 +139,7 @@ module Effects: {
     (
       ~font: Service_Font.font,
       ~languageInfo: Exthost.LanguageInfo.t,
-      ~split: [ | `Current | `Horizontal | `Vertical | `NewTab]=?,
+      ~split: SplitDirection.t=?,
       ~position: option(CharacterPosition.t)=?,
       ~grabFocus: bool=?,
       ~filePath: string,
@@ -135,14 +152,20 @@ module Effects: {
     (
       ~font: Service_Font.font,
       ~languageInfo: Exthost.LanguageInfo.t,
-      ~split: [ | `Current | `Horizontal | `Vertical | `NewTab],
+      ~split: SplitDirection.t,
       ~bufferId: int,
       model
     ) =>
     Isolinear.Effect.t(msg);
 };
 
-let sub: model => Isolinear.Sub.t(msg);
+let vimSettingChanged:
+  (~activeBufferId: int, ~name: string, ~value: Vim.Setting.value, model) =>
+  Isolinear.Effect.t(msg);
+
+let sub:
+  (~isWindowFocused: bool, ~maybeFocusedBuffer: option(int), model) =>
+  Isolinear.Sub.t(msg);
 
 module Contributions: {
   let commands: Command.Lookup.t(msg);
